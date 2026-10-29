@@ -29,6 +29,7 @@ function copyJob(job) {
     targets: job.targets.slice(),
     phase: job.phase,
     bytes: job.bytes,
+    archiveBytes: job.archiveBytes,
     files: job.files,
     copied: job.copied,
     name: job.name,
@@ -93,6 +94,7 @@ export function createJobStore(options = {}) {
     if (isTerminalPhase(job.phase) || progress === null || typeof progress !== 'object') return;
     if (typeof progress.phase === 'string') job.phase = progress.phase;
     if (Number.isFinite(progress.bytes)) job.bytes = Number(progress.bytes);
+    if (Number.isFinite(progress.archiveBytes)) job.archiveBytes = Number(progress.archiveBytes);
     if (Number.isFinite(progress.files)) job.files = Number(progress.files);
     if (Number.isFinite(progress.copied)) job.copied = Number(progress.copied);
     job.updatedAt = new Date(clock()).toISOString();
@@ -148,6 +150,7 @@ export function createJobStore(options = {}) {
         targets: Array.isArray(request.targets) ? request.targets.slice() : [],
         phase: 'queued',
         bytes: 0,
+        archiveBytes: null,
         files: 0,
         copied: 0,
         name: null,

@@ -57,5 +57,14 @@
   "videoSkills.targetHint": "Keep at least one install target selected",
   "videoSkills.openRepo": "Open the repository on GitHub",
   "videoSkills.openPath": "Path",
-  "videoSkills.error.ownership": "That directory was not installed by this plugin: {name}"
-}
+  "videoSkills.error.ownership": "That directory was not installed by this plugin: {name}",
+  "videoSkills.sizeUnknown": "—",
+  "videoSkills.sizeHintKnown": "GitHub repository size (includes .git), cached locally for 7 days",
+  "videoSkills.sizeHintUnknown": "Size not fetched yet (background warming, about 60 per hour)",
+  "videoSkills.sizeCoverage": "{n} skills · sizes {known}/{total}",
+  "videoSkills.phase.queued": "Queued",
+  "videoSkills.phase.downloaded": "Downloaded {mb} MB",
+  "videoSkills.phase.archive": "Archive {mb} MB / {n} files",
+  "videoSkills.installedBytes": "{mb} MB on disk",
+  "videoSkills.claudeTargetHint": "The Claude target keeps this skill out of the skill explorer (it only scans ~/.dsh/skills and ~/.agents/skills); the skill still works"
+  }

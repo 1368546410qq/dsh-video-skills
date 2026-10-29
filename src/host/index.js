@@ -6,6 +6,7 @@
 import { filterEntries, loadCatalog, refreshCatalog } from './catalog.js';
 import { installSkill, listInstalled, normalizeRepo, normalizeTargets, uninstallSkill } from './install.js';
 import { createJobStore } from './jobs.js';
+import { createSizeWarmer, loadSizeStore } from './sizes.js';
 import { buildVideoTools, resolveDefineTool } from './tool-schema.js';
 
 /** Cordis plugin name. */
@@ -16,6 +17,10 @@ export const inject = [];
 export const API_BASE = '/video-skills/api/v1';
 /** Largest JSON body accepted on POST routes. */
 export const MAX_BODY_BYTES = 64 * 1024;
+/** Background repository-size prefetch interval, in milliseconds. */
+export const SIZE_WARM_INTERVAL_MS = 60 * 1000;
+/** Repositories prefetched per background batch. */
+export const SIZE_WARM_BATCH = 5;
 
 /** Write one JSON response. */
 function sendJson(res, status, body) {
@@ -73,6 +78,9 @@ function uninstallStatus(error) {
  * @param options.listInstalled - installed-skill inventory.
  * @param options.loadCatalog - cached catalog loader.
  * @param options.refreshCatalog - forced catalog refetch.
+ * @param options.sizeState - live size cache holder; store and warmer fill it.
+ * @param options.sizes - size store, when the caller owns the holder itself.
+ * @param options.warmer - size warmer reporting the response coverage.
  */
 export function createHandler(services = {}) {
   const store = services.store ?? createJobStore();
@@ -81,6 +89,7 @@ export function createHandler(services = {}) {
   const inventory = services.listInstalled ?? listInstalled;
   const load = services.loadCatalog ?? loadCatalog;
   const refresh = services.refreshCatalog ?? refreshCatalog;
+  const sizeState = services.sizeState ?? { store: services.sizes ?? null, warmer: services.warmer ?? null };
 
   /** Route dispatch for every request under API_BASE. */
   async function handle(req, res) {
@@ -89,7 +98,17 @@ export function createHandler(services = {}) {
     const route = pathname.slice(API_BASE.length).replace(/\/+$/, '') || '/';
 
     if (route === '/catalog' && method === 'GET') {
-      sendJson(res, 200, await load());
+      const catalog = await load({ sizes: sizeState.store ?? null });
+      const warmer = sizeState.warmer ?? null;
+      if (warmer !== null && Array.isArray(catalog?.entries)) {
+        warmer.setRepos(catalog.entries.map((entry) => entry.repo));
+        // A cold start knows no repos until the first catalog read, so the read
+        // itself kicks a batch; repeats are absorbed by the warmer's own flight.
+        warmer.warm(SIZE_WARM_BATCH).catch(() => {});
+      }
+      const coverage = warmer === null ? null : warmer.coverage();
+      const body = coverage === null || catalog === null || typeof catalog !== 'object' ? catalog : { ...catalog, sizes: coverage };
+      sendJson(res, 200, body);
       return;
     }
     if (route === '/installed' && method === 'GET') {
@@ -191,8 +210,60 @@ export function createHandler(services = {}) {
   };
 }
 
+/** Size cache the route reads; the store and the warmer fill it once loaded. */
+const sizeState = { store: null, warmer: null };
+
 /** The handler the web server mounts, backed by the real services. */
-const handler = createHandler();
+const handler = createHandler({ sizeState });
+
+/** Run one background batch; the warmer itself never rejects on a transport failure. */
+function warmSizes() {
+  if (sizeState.warmer === null) return;
+  sizeState.warmer.warm(SIZE_WARM_BATCH).catch(() => {});
+}
+
+/**
+ * Load the per-user size cache and start the background prefetch inside the
+ * composition's effect scope, so the timer dies with the plugin.
+ *
+ * The first batch runs before the interval is armed: a restarted host would
+ * otherwise show an empty size column for a whole minute.
+ *
+ * @param scope - composition scope carrying `effect`, when the host has one.
+ * @param services - seams for tests; production composes the real collaborators.
+ * @param services.loadSizeStore - size cache reader.
+ * @param services.createSizeWarmer - warmer factory.
+ */
+export async function startSizes(scope, services = {}) {
+  const readSizes = services.loadSizeStore ?? loadSizeStore;
+  const buildWarmer = services.createSizeWarmer ?? createSizeWarmer;
+  const store = await readSizes();
+  sizeState.store = store;
+  sizeState.warmer = buildWarmer({ store });
+  warmSizes();
+  if (typeof scope?.effect === 'function') {
+    scope.effect(() => {
+      const timer = setInterval(warmSizes, SIZE_WARM_INTERVAL_MS);
+      return () => clearInterval(timer);
+    });
+    return;
+  }
+  const timer = setInterval(warmSizes, SIZE_WARM_INTERVAL_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+}
+
+/**
+ * Build the catalog loader the tools share with the route.
+ *
+ * The store is read at call time, so a tool call that lands before the size
+ * cache finished loading still answers — with unknown sizes instead of a throw.
+ *
+ * @param readStore - store accessor; defaults to the live size state.
+ * @param load - catalog loader; defaults to the cached loader.
+ */
+export function createToolCatalogLoader(readStore = () => sizeState.store, load = loadCatalog) {
+  return () => load({ sizes: readStore() ?? null });
+}
 
 /** Register the three tools when the host composed a tool registry. */
 async function registerTools(ctx) {
@@ -204,7 +275,13 @@ async function registerTools(ctx) {
   }
   if (!tools || typeof tools.register !== 'function') return false;
   const defineTool = await resolveDefineTool();
-  const definitions = buildVideoTools({ defineTool, loadCatalog, filterEntries, installSkill, uninstallSkill });
+  const definitions = buildVideoTools({
+    defineTool,
+    loadCatalog: createToolCatalogLoader(),
+    filterEntries,
+    installSkill,
+    uninstallSkill,
+  });
   for (const definition of definitions) tools.register(definition);
   return true;
 }
@@ -227,6 +304,9 @@ function mountRoutes(scope) {
  * the web server a precondition for the whole plugin.
  */
 export function apply(ctx) {
+  startSizes(ctx).catch(() => {
+    /* an unreadable cache only costs sizes; the route still answers */
+  });
   if (typeof ctx?.inject === 'function') {
     ctx.inject(['tools'], (scope) => { registerTools(scope).catch(() => {}); });
     ctx.inject(['webServer'], mountRoutes);

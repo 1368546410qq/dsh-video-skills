@@ -21,10 +21,12 @@ const NS = "dsh-video-skills";
 const SETTINGS_SECTION = "settings.section";
 
 const failures = [];
+let assertions = 0;
 
 async function check(label, body) {
-	try {
-		await body();
+  assertions += 1;
+  try {
+    await body();
 		console.log("  ok    " + label);
 	} catch (error) {
 		failures.push(label + " -> " + error.message);
@@ -481,6 +483,7 @@ function loadUi(options) {
 	const server = makeServer();
 	if (Array.isArray(settings.items)) server.installed = { ok: true, items: settings.items };
 	if (Array.isArray(settings.entries)) server.catalog = { ok: true, entries: settings.entries, stale: false, generated: "2026-01-01T00:00:00.000Z" };
+	if (settings.sizes !== undefined) server.catalog = Object.assign({}, server.catalog, { sizes: settings.sizes });
 	const driver = makeLiveReact();
 	const require = makeRequire(driver.React);
 	const registered = [];
@@ -717,16 +720,16 @@ await check("install posts the selected targets and starts the job", async () =>
 	await tick();
 	const root = jobUi.driver.page();
 	assert(buttons(root, "取消").length === 1, "a running job renders no cancel button");
-	assert(phaseLines(root).join("|") === "下载中 0.0 MB", "phase line: " + phaseLines(root).join("|"));
+	assert(phaseLines(root).join("|") === "已下载 0.0 MB", "phase line: " + phaseLines(root).join("|"));
 });
 
-await check("phase text maps download / unpack / copy", async () => {
-	const steps = [
-		{ phase: "download", extra: { bytes: 1572864 }, expected: "下载中 1.5 MB" },
-		{ phase: "inspect", extra: {}, expected: "解包中" },
-		{ phase: "extract", extra: {}, expected: "解包中" },
-		{ phase: "copy", extra: { copied: 7, files: 7 }, expected: "拷贝 7 文件" }
-	];
+await check("phase text maps download / archive / unpack / copy", async () => {
+  const steps = [
+    { phase: "download", extra: { bytes: 1572864 }, expected: "已下载 1.5 MB" },
+    { phase: "inspect", extra: { archiveBytes: 76021760, files: 254 }, expected: "归档 72.5 MB / 254 文件" },
+    { phase: "extract", extra: {}, expected: "解包中" },
+    { phase: "copy", extra: { copied: 7, files: 7 }, expected: "拷贝 7 文件" }
+  ];
 	for (const step of steps) {
 		await jobUi.clock.advance(500);
 		const polls = jobUi.server.pending((call) => call.method === "GET" && call.url.indexOf("/install/job-1") >= 0);
@@ -890,7 +893,188 @@ await check("只看已安装 filters the list to installed rows", () => {
 	assert(textOf(repoLinks(root)[0]) === "acme/veo3", "wrong row kept: " + textOf(repoLinks(root)[0]));
 });
 
+
+console.log("");
+console.log("[v3 sizes, coverage and progress]");
+
+/** The inline size badge of every catalog row, in render order. */
+function sizeBadges(root) {
+	return nodes(root, (node) => node.props.key === "size").map((node) => ({ text: textOf(node), title: node.props.title }));
+}
+
+/** The status line count / coverage sentence. */
+function countLine(root) {
+	const found = nodes(root, (node) => node.props.key === "count");
+	return found.length === 0 ? "" : textOf(found[0]);
+}
+
+/** One line per installed target: dir, file count, and disk usage when /installed reports it. */
+function installedTexts(root) {
+	return nodes(root, (node) => node.type === "p" && typeof node.props.key === "string" && node.props.key.indexOf("installed-") === 0).map(textOf);
+}
+
+const SIZED = [
+	{ repo: "acme/bytes", name: "bytes", description: "Byte sized", kind: "general", grade: "safe", stars: 1, license: "MIT", sizeBytes: 512 },
+	{ repo: "acme/kilos", name: "kilos", description: "Kilo sized", kind: "general", grade: "safe", stars: 2, license: "MIT", sizeBytes: 3686 },
+	{ repo: "acme/megas", name: "megas", description: "Mega sized", kind: "general", grade: "safe", stars: 3, license: "MIT", sizeBytes: 3774873 },
+	{ repo: "acme/gigas", name: "gigas", description: "Giga sized", kind: "general", grade: "safe", stars: 4, license: "MIT", sizeBytes: 5368709120 },
+	{ repo: "acme/none", name: "none", description: "No size yet", kind: "general", grade: "safe", stars: 5, license: "MIT" }
+];
+const sizeUi = loadUi({ entries: SIZED, sizes: { known: 49, total: 373 } });
+await tick();
+
+await check("formatBytes: whole bytes below 1 KB", () => {
+	const badges = sizeBadges(sizeUi.driver.page());
+	assert(badges.length === SIZED.length, "size badges: " + badges.length);
+	assert(badges[0].text === "≈ 512 B", "512 B renders as " + JSON.stringify(badges[0].text));
+});
+
+await check("formatBytes: KB with one decimal", () => {
+	const badge = sizeBadges(sizeUi.driver.page())[1];
+	assert(badge.text === "≈ 3.6 KB", "3686 B renders as " + JSON.stringify(badge.text));
+});
+
+await check("formatBytes: MB with one decimal", () => {
+	const badge = sizeBadges(sizeUi.driver.page())[2];
+	assert(badge.text === "≈ 3.6 MB", "3774873 B renders as " + JSON.stringify(badge.text));
+});
+
+await check("formatBytes: GB with one decimal", () => {
+	const badge = sizeBadges(sizeUi.driver.page())[3];
+	assert(badge.text === "≈ 5.0 GB", "5 GiB renders as " + JSON.stringify(badge.text));
+});
+
+await check("a missing sizeBytes renders — and explains why", () => {
+	const badge = sizeBadges(sizeUi.driver.page())[4];
+	assert(badge.text === "—", "missing size renders as " + JSON.stringify(badge.text));
+	assert(badge.title === zhFile["videoSkills.sizeHintUnknown"], "unknown size title: " + JSON.stringify(badge.title));
+});
+
+await check("a known size carries the 7-day cache hint", () => {
+	const badge = sizeBadges(sizeUi.driver.page())[0];
+	assert(badge.title === zhFile["videoSkills.sizeHintKnown"], "known size title: " + JSON.stringify(badge.title));
+});
+
+await check("sizes coverage renders 共 N 个技能 · 大小 known/total", () => {
+	assert(countLine(sizeUi.driver.page()) === "共 5 个技能 · 大小 49/373", "count line: " + JSON.stringify(countLine(sizeUi.driver.page())));
+});
+
+const plainUi = loadUi({ entries: SIZED });
+await tick();
+
+await check("a catalog without sizes keeps the plain count sentence", () => {
+	assert(countLine(plainUi.driver.page()) === "共 5 个技能", "count line: " + JSON.stringify(countLine(plainUi.driver.page())));
+});
+
+const bytesUi = loadUi({
+	entries: CATALOG,
+	items: [{ name: "veo3", target: "dsh", dir: "/x/.dsh/skills/veo3", repo: "acme/veo3", path: "skills/veo3", installedAt: "t", files: 7, bytes: 2202009, owned: true, external: false }]
+});
+await tick();
+
+await check("an installed row shows dir, files and disk usage on one line", () => {
+	const texts = installedTexts(bytesUi.driver.page());
+	assert(texts.length === 1, "installed lines: " + texts.length);
+	assert(texts[0] === "/x/.dsh/skills/veo3 · 7 个文件 · 占用 2.1 MB", "line: " + JSON.stringify(texts[0]));
+});
+
+const noBytesUi = loadUi({
+	entries: CATALOG,
+	items: [{ name: "veo3", target: "dsh", dir: "/x/.dsh/skills/veo3", repo: "acme/veo3", path: "skills/veo3", installedAt: "t", files: 7, owned: true, external: false }]
+});
+await tick();
+
+await check("an installed row without Item.bytes omits the size", () => {
+	const texts = installedTexts(noBytesUi.driver.page());
+	assert(texts.length === 1, "installed lines: " + texts.length);
+	assert(texts[0] === "/x/.dsh/skills/veo3 · 7 个文件", "line: " + JSON.stringify(texts[0]));
+});
+
+const phaseUi = loadUi({ entries: CATALOG });
+await tick();
+
+await check("phaseText: 排队中, then 已下载, then 归档 with archiveBytes and files", async () => {
+	clickButton(phaseUi.driver.page(), "安装");
+	phaseUi.server.pending((call) => call.method === "POST" && call.url.endsWith("/install"))[0].resolveWith(202, { ok: true, job: { id: "job-q", phase: "queued" } });
+	await tick();
+	assert(phaseLines(phaseUi.driver.page()).join("|") === "排队中", "queued -> " + phaseLines(phaseUi.driver.page()).join("|"));
+	await phaseUi.clock.advance(500);
+	phaseUi.server.pending((call) => call.method === "GET" && call.url.indexOf("/install/job-q") >= 0)[0].resolveWith(200, { ok: true, job: { id: "job-q", phase: "download", bytes: 3145728, archiveBytes: 3145728 } });
+	await tick();
+	assert(phaseLines(phaseUi.driver.page()).join("|") === "已下载 3.0 MB", "download -> " + phaseLines(phaseUi.driver.page()).join("|"));
+	await phaseUi.clock.advance(500);
+	phaseUi.server.pending((call) => call.method === "GET" && call.url.indexOf("/install/job-q") >= 0)[0].resolveWith(200, { ok: true, job: { id: "job-q", phase: "inspect", archiveBytes: 76021760, files: 254 } });
+	await tick();
+	assert(phaseLines(phaseUi.driver.page()).join("|") === "归档 72.5 MB / 254 文件", "inspect -> " + phaseLines(phaseUi.driver.page()).join("|"));
+});
+
+const barUi = loadUi({ entries: CATALOG });
+await tick();
+
+await check("the download line carries a 2px overlay bar driven by injected keyframes", async () => {
+	clickButton(barUi.driver.page(), "安装");
+	barUi.server.pending((call) => call.method === "POST" && call.url.endsWith("/install"))[0].resolveWith(202, { ok: true, job: { id: "job-b", phase: "download", bytes: 0 } });
+	await tick();
+	const root = barUi.driver.page();
+	const tracks = nodes(root, (node) => node.props.key === "bar");
+	assert(tracks.length === 1, "progress bars in the download phase: " + tracks.length);
+	assert(tracks[0].props.style.height === "2px", "bar height: " + tracks[0].props.style.height);
+	assert(tracks[0].props.style.position === "absolute", "the bar must overlay the line, not reflow it: " + tracks[0].props.style.position);
+	const fill = tracks[0].children[0];
+	assert(fill !== undefined && fill.props.className === "dsh-video-skills-progress", "bar class: " + (fill === undefined ? "none" : fill.props.className));
+	const css = nodes(root, (node) => node.type === "style").map(textOf).join("");
+	assert(css.indexOf("@keyframes dsh-video-skills-progress") >= 0, "the keyframes are not injected");
+	assert(css.indexOf(".dsh-video-skills-progress { animation: dsh-video-skills-progress") >= 0, "the bar class does not animate");
+});
+
+console.log("[v3 claude target hint]");
+const claudeUi = loadUi({ entries: CATALOG });
+await tick();
+
+await check("no Claude skill-explorer hint while the Claude target is unchecked", () => {
+	const checked = checkboxes(claudeUi.driver.page()).filter((node) => node.props.checked === true).map((node) => node.props.value);
+	assert(checked.join("|") === "dsh", "checked targets: " + checked.join("|"));
+	assert(nodes(claudeUi.driver.page(), (node) => node.props.key === "claude-note").length === 0, "the hint renders before Claude is selected");
+});
+
+await check("checking Claude explains that the skill explorer cannot see it", () => {
+	boxFor(claudeUi.driver.page(), "claude").props.onChange({ target: { checked: true } });
+	const notes = nodes(claudeUi.driver.page(), (node) => node.props.key === "claude-note");
+	assert(notes.length === 1, "hint nodes after checking Claude: " + notes.length);
+	assert(textOf(notes[0]) === zhFile["videoSkills.claudeTargetHint"], "hint text: " + JSON.stringify(textOf(notes[0])));
+	boxFor(claudeUi.driver.page(), "claude").props.onChange({ target: { checked: false } });
+	assert(nodes(claudeUi.driver.page(), (node) => node.props.key === "claude-note").length === 0, "the hint outlived the Claude selection");
+});
+
+console.log("[v3 i18n]");
+
+const NEW_KEYS = [
+	"videoSkills.sizeUnknown",
+	"videoSkills.sizeHintKnown",
+	"videoSkills.sizeHintUnknown",
+	"videoSkills.sizeCoverage",
+	"videoSkills.phase.queued",
+	"videoSkills.phase.downloaded",
+	"videoSkills.phase.archive",
+	"videoSkills.installedBytes"
+];
+
+await check("each of the 8 new keys is present in zh-CN.json and en-US.json", () => {
+	const missingZh = NEW_KEYS.filter((key) => typeof zhFile[key] !== "string" || zhFile[key] === "");
+	const missingEn = NEW_KEYS.filter((key) => typeof enFile[key] !== "string" || enFile[key] === "");
+	assert(missingZh.length === 0, "zh-CN.json is missing: " + missingZh.join(", "));
+	assert(missingEn.length === 0, "en-US.json is missing: " + missingEn.join(", "));
+});
+
+await check("both dictionaries carry the same 68 keys", () => {
+  assert(Object.keys(zhFile).length === 68, "zh keys: " + Object.keys(zhFile).length);
+  assert(Object.keys(enFile).length === 68, "en keys: " + Object.keys(enFile).length);
+	assert(JSON.stringify(Object.keys(zhFile).sort()) === JSON.stringify(Object.keys(enFile).sort()), "the key sets differ");
+});
+
 console.log("locale keys: " + Object.keys(zhFile).length + " (zh) / " + Object.keys(enFile).length + " (en)");
+
+console.log("assertions: " + assertions);
 
 if (failures.length > 0) {
 	console.log("");

@@ -62,6 +62,12 @@ window.__ModuleLoader__.load({
 		var POLL_MS = 500;
 		/** Bytes per MiB, for the download phase line. */
 		var MIB = 1048576;
+		/** Bytes per GiB, the top rung of the human-size ladder. */
+		var GIB = MIB * 1024;
+		/** Keyframes of the indeterminate download bar; an inline style cannot carry @keyframes. */
+		var PROGRESS_CSS = "@keyframes dsh-video-skills-progress { from { transform: translateX(-100%); } to { transform: translateX(320%); } }"
+			+ ".dsh-video-skills-progress { animation: dsh-video-skills-progress 1.15s ease-in-out infinite; }"
+			+ "@media (prefers-reduced-motion: reduce) { .dsh-video-skills-progress { animation: none; } }";
 		/** Public web root of a catalog repository. */
 		var GITHUB = "https://github.com/";
 		var KINDS = ["general", "promo", "explainer", "editing", "shorts", "avatar", "story", "motion", "craft", "music"];
@@ -127,8 +133,17 @@ window.__ModuleLoader__.load({
 			"videoSkills.targetHint": "至少要保留一个安装目标",
 			"videoSkills.openRepo": "在 GitHub 打开仓库",
 			"videoSkills.openPath": "路径",
-			"videoSkills.error.ownership": "该目录不属于本插件，无法卸载：{name}"
-		};
+			"videoSkills.error.ownership": "该目录不属于本插件，无法卸载：{name}",
+			"videoSkills.sizeUnknown": "—",
+			"videoSkills.sizeHintKnown": "GitHub 仓库大小（含 .git），本地缓存 7 天",
+			"videoSkills.sizeHintUnknown": "尚未取得大小（后台预取，约每小时 60 条）",
+			"videoSkills.sizeCoverage": "共 {n} 个技能 · 大小 {known}/{total}",
+			"videoSkills.phase.queued": "排队中",
+			"videoSkills.phase.downloaded": "已下载 {mb} MB",
+			"videoSkills.phase.archive": "归档 {mb} MB / {n} 文件",
+			"videoSkills.installedBytes": "占用 {mb} MB",
+			"videoSkills.claudeTargetHint": "装到 Claude 目标不会出现在技能中心（它只扫 ~/.dsh/skills、~/.agents/skills），技能本身照常可用"
+			};
 
 		/** English copy — mirrors locale/en-US.json key for key. */
 		var en = {
@@ -190,8 +205,17 @@ window.__ModuleLoader__.load({
 			"videoSkills.targetHint": "Keep at least one install target selected",
 			"videoSkills.openRepo": "Open the repository on GitHub",
 			"videoSkills.openPath": "Path",
-			"videoSkills.error.ownership": "That directory was not installed by this plugin: {name}"
-		};
+			"videoSkills.error.ownership": "That directory was not installed by this plugin: {name}",
+			"videoSkills.sizeUnknown": "—",
+			"videoSkills.sizeHintKnown": "GitHub repository size (includes .git), cached locally for 7 days",
+			"videoSkills.sizeHintUnknown": "Size not fetched yet (background warming, about 60 per hour)",
+			"videoSkills.sizeCoverage": "{n} skills · sizes {known}/{total}",
+			"videoSkills.phase.queued": "Queued",
+			"videoSkills.phase.downloaded": "Downloaded {mb} MB",
+			"videoSkills.phase.archive": "Archive {mb} MB / {n} files",
+			"videoSkills.installedBytes": "{mb} MB on disk",
+			"videoSkills.claudeTargetHint": "The Claude target keeps this skill out of the skill explorer (it only scans ~/.dsh/skills and ~/.agents/skills); the skill still works"
+			};
 
 				var STYLE = {
 			page: { display: "flex", flexDirection: "column", gap: "10px", padding: "16px", font: "13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif", color: "inherit" },
@@ -225,8 +249,14 @@ window.__ModuleLoader__.load({
 			hint: { margin: 0, fontSize: "12px", color: "color-mix(in srgb, currentColor 74%, transparent)" },
 			buttonDanger: { padding: "3px 10px", borderRadius: "6px", border: "1px solid rgba(212,56,47,0.6)", background: "rgba(212,56,47,0.1)", color: "#d4382f", cursor: "pointer", fontSize: "12.5px" },
 			check: { display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "11px", cursor: "pointer", color: "color-mix(in srgb, currentColor 88%, transparent)" },
-			checkInput: { margin: 0, accentColor: "var(--dsh-accent, #4f8cff)" }
-		};
+			checkInput: { margin: 0, accentColor: "var(--dsh-accent, #4f8cff)" },
+			phaseBox: { position: "relative", display: "block", margin: 0, fontSize: "11px", color: "color-mix(in srgb, currentColor 74%, transparent)" },
+			barTrack: { position: "absolute", left: 0, right: 0, bottom: 0, height: "2px", overflow: "hidden", borderRadius: "999px", background: "color-mix(in srgb, currentColor 16%, transparent)", pointerEvents: "none" },
+			barFill: { position: "absolute", top: 0, bottom: 0, width: "34%", borderRadius: "999px", background: "color-mix(in srgb, currentColor 56%, transparent)" },
+			installedBox: { display: "flex", flexDirection: "column", minWidth: 0 },
+			installedLine: { margin: 0, fontSize: "10.5px", color: "color-mix(in srgb, currentColor 64%, transparent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+			targetNote: { fontSize: "10.5px", lineHeight: "15px", color: "color-mix(in srgb, currentColor 62%, transparent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, flex: "0 1 auto" }
+			};
 
 		/** Substitute {name} placeholders; an unknown placeholder is left verbatim. */
 		function fmt(template, params) {
@@ -481,6 +511,7 @@ window.__ModuleLoader__.load({
 				id: typeof source.id === "string" && source.id !== "" ? source.id : prior.id,
 				phase: typeof source.phase === "string" ? source.phase : "",
 				bytes: Number(source.bytes) || 0,
+				archiveBytes: Number(source.archiveBytes) || 0,
 				files: Number(source.files) || 0,
 				copied: Number(source.copied) || 0,
 				message: typeof source.message === "string" ? source.message : "",
@@ -495,6 +526,7 @@ window.__ModuleLoader__.load({
 				id: view.id,
 				phase: view.phase,
 				bytes: view.bytes,
+				archiveBytes: view.archiveBytes,
 				files: view.files,
 				copied: view.copied,
 				message: view.message,
@@ -513,6 +545,15 @@ window.__ModuleLoader__.load({
 			return job !== null && job !== undefined && typeof job.phase === "string" && job.phase !== "" && isTerminal(job.phase) !== true;
 		}
 
+		/** Human size of a byte count: whole bytes below 1 KB, then one decimal for KB / MB / GB. Empty when the value is not a byte total. */
+		function formatBytes(bytes) {
+			if (typeof bytes !== "number" || isFinite(bytes) !== true || bytes < 0) return "";
+			if (bytes < 1024) return String(Math.round(bytes)) + " B";
+			if (bytes < MIB) return (bytes / 1024).toFixed(1) + " KB";
+			if (bytes < GIB) return (bytes / MIB).toFixed(1) + " MB";
+			return (bytes / GIB).toFixed(1) + " GB";
+		}
+
 		/**
 		* The one line an install job renders. done and error carry none: done clears the
 		* phase and refreshes /installed, error renders the host message in full instead.
@@ -520,8 +561,13 @@ window.__ModuleLoader__.load({
 		function phaseText(t, job) {
 			if (job === null || job === undefined || typeof job !== "object") return "";
 			var phase = job.phase;
-			if (phase === "queued" || phase === "download") return t("videoSkills.phase.download", { mb: ((Number(job.bytes) || 0) / MIB).toFixed(1) });
-			if (phase === "inspect" || phase === "extract") return t("videoSkills.phase.unpack");
+			if (phase === "queued") return t("videoSkills.phase.queued");
+			if (phase === "download") return t("videoSkills.phase.downloaded", { mb: ((Number(job.bytes) || 0) / MIB).toFixed(1) });
+			if (phase === "inspect" || phase === "extract") {
+				var archiveBytes = Number(job.archiveBytes) || 0;
+				if (archiveBytes > 0) return t("videoSkills.phase.archive", { mb: (archiveBytes / MIB).toFixed(1), n: Number(job.files) || 0 });
+				return t("videoSkills.phase.unpack");
+			}
 			if (phase === "copy") return t("videoSkills.phase.copy", { n: Number(job.copied) || 0 });
 			if (phase === "cancelled") return t("videoSkills.cancelled");
 			return "";
@@ -629,7 +675,7 @@ window.__ModuleLoader__.load({
 				if (item === null || typeof item !== "object" || typeof item.name !== "string" || item.name === "") continue;
 				var group = byName[item.name];
 				if (group === undefined) {
-					group = { name: item.name, targets: [], owned: [], external: false, repo: null, path: null };
+					group = { name: item.name, targets: [], owned: [], external: false, repo: null, path: null, rows: [] };
 					byName[item.name] = group;
 				}
 				if (typeof item.target === "string" && group.targets.indexOf(item.target) < 0) group.targets.push(item.target);
@@ -637,6 +683,12 @@ window.__ModuleLoader__.load({
 				if (item.external === true) group.external = true;
 				if (typeof item.repo === "string" && item.repo !== "") group.repo = item.repo;
 				if (typeof item.path === "string" && item.path !== "") group.path = item.path;
+				group.rows.push({
+					target: typeof item.target === "string" ? item.target : "",
+					dir: typeof item.dir === "string" ? item.dir : "",
+					files: Number(item.files) || 0,
+					bytes: Number(item.bytes) || 0
+				});
 				if (typeof item.repo === "string" && item.repo !== "" && byRepo[item.repo] === undefined) byRepo[item.repo] = group.name;
 			}
 			return { byName: byName, byRepo: byRepo };
@@ -657,11 +709,21 @@ window.__ModuleLoader__.load({
 			return null;
 		}
 
+		/** The size coverage /catalog reports, or null when the host does not carry it. */
+		function catalogSizes(body) {
+			var sizes = body !== null && typeof body === "object" ? body.sizes : null;
+			if (sizes === null || typeof sizes !== "object") return null;
+			var known = Number(sizes.known);
+			var total = Number(sizes.total);
+			if (isFinite(known) !== true || isFinite(total) !== true || total <= 0 || known < 0) return null;
+			return { known: known, total: total };
+		}
+
 		/** The catalog page: target bar, filter bar, at most 100 rows, per-row install job and uninstall control. */
 		function VideoSkillsPage(props) {
 			var t = props !== undefined && props !== null && typeof props.t === "function" ? props.t : translator(undefined);
 
-			var snapshotState = useState({ status: "loading", entries: [], stale: false, generated: "", error: "" });
+			var snapshotState = useState({ status: "loading", entries: [], stale: false, generated: "", sizes: null, error: "" });
 			var snapshot = snapshotState[0];
 			var setSnapshot = snapshotState[1];
 			var installedState = useState({ byName: {}, byRepo: {} });
@@ -733,13 +795,13 @@ window.__ModuleLoader__.load({
 
 			var loadCatalog = useCallback(function () {
 				setSnapshot(function (previous) {
-					return { status: "loading", entries: previous.entries, stale: previous.stale, generated: previous.generated, error: "" };
+					return { status: "loading", entries: previous.entries, stale: previous.stale, generated: previous.generated, sizes: previous.sizes, error: "" };
 				});
 				requestJson("/catalog", { method: "GET" }).then(function (result) {
 					if (!alive()) return;
 					var body = result.body;
 					if (result.ok !== true || body === null || body.ok !== true) {
-						setSnapshot({ status: "error", entries: [], stale: false, generated: "", error: t("videoSkills.error.load", { message: "HTTP " + String(result.status) }) });
+						setSnapshot({ status: "error", entries: [], stale: false, generated: "", sizes: null, error: t("videoSkills.error.load", { message: "HTTP " + String(result.status) }) });
 						return;
 					}
 					setSnapshot({
@@ -747,6 +809,7 @@ window.__ModuleLoader__.load({
 						entries: Array.isArray(body.entries) ? body.entries : [],
 						stale: body.stale === true,
 						generated: typeof body.generated === "string" ? body.generated : "",
+						sizes: catalogSizes(body),
 						error: ""
 					});
 				}, function (error) {
@@ -756,6 +819,7 @@ window.__ModuleLoader__.load({
 						entries: [],
 						stale: false,
 						generated: "",
+						sizes: null,
 						error: error !== null && error !== undefined && error.network === true ? t("videoSkills.error.network") : t("videoSkills.error.load", { message: String(error !== null && error !== undefined ? error.message : error) })
 					});
 				});
@@ -800,6 +864,7 @@ window.__ModuleLoader__.load({
 								entries: previous.entries,
 								stale: previous.stale,
 								generated: previous.generated,
+								sizes: previous.sizes,
 								error: t("videoSkills.error.refresh", { message: String(error !== null && error !== undefined ? error.message : error) })
 							};
 						});
@@ -1055,7 +1120,7 @@ window.__ModuleLoader__.load({
 			var targetBar = h("div", { key: "targets", style: STYLE.bar }, [
 				h("span", { key: "label", style: STYLE.hint }, t("videoSkills.installTo"))
 			].concat(TARGETS.map(function (target) {
-				return h("label", { key: target, style: STYLE.check, title: target === "claude" ? "~/.claude/skills" : "~/.dsh/skills" }, [
+				var parts = [h("label", { key: target, style: STYLE.check, title: target === "claude" ? "~/.claude/skills" : "~/.dsh/skills" }, [
 					h("input", {
 						type: "checkbox",
 						value: target,
@@ -1064,7 +1129,12 @@ window.__ModuleLoader__.load({
 						onChange: function () { try { toggleTarget(target); } catch (error) { } }
 					}),
 					t("videoSkills.target." + target)
-				]);
+				])];
+				/** The skill explorer behind the shell only scans the DSH roots, so a Claude-only install is invisible there. */
+				if (target === "claude" && targets.indexOf("claude") >= 0) {
+					parts.push(h("span", { key: "claude-note", style: STYLE.targetNote, title: t("videoSkills.claudeTargetHint") }, t("videoSkills.claudeTargetHint")));
+				}
+				return parts;
 			})).concat([
 				h("button", {
 					key: "onlyInstalled",
@@ -1155,7 +1225,9 @@ window.__ModuleLoader__.load({
 			else if (snapshot.error !== "") statusLine = h("p", { key: "status", style: STYLE.error, role: "alert" }, snapshot.error);
 			else {
 				statusLine = h("div", { key: "status", style: STYLE.meta }, [
-					h("span", { key: "count" }, t("videoSkills.count", { n: filtered.length })),
+					h("span", { key: "count" }, snapshot.sizes !== null && snapshot.sizes !== undefined
+						? t("videoSkills.sizeCoverage", { n: filtered.length, known: snapshot.sizes.known, total: snapshot.sizes.total })
+						: t("videoSkills.count", { n: filtered.length })),
 					snapshot.stale === true ? h("span", { key: "stale", style: STYLE.badgeStale }, t("videoSkills.stale")) : null
 				]);
 			}
@@ -1167,6 +1239,13 @@ window.__ModuleLoader__.load({
 				var job = jobs[repo];
 				var running = isRunning(job);
 				var hasPath = typeof entry.path === "string" && entry.path !== "";
+				var sizeText = formatBytes(entry.sizeBytes);
+				var downloading = job !== undefined && job.phase === "download";
+				var sizeBadge = h("span", {
+					key: "size",
+					style: STYLE.badge,
+					title: sizeText === "" ? t("videoSkills.sizeHintUnknown") : t("videoSkills.sizeHintKnown")
+				}, sizeText === "" ? t("videoSkills.sizeUnknown") : "≈ " + sizeText);
 				var line = "";
 				var failure = "";
 				if (job !== undefined) {
@@ -1176,6 +1255,7 @@ window.__ModuleLoader__.load({
 				if (rowErrors[repo] !== undefined) failure = String(rowErrors[repo]);
 				var metaBits = [
 					h("span", { key: "stars", style: STYLE.badge }, t("videoSkills.stars", { n: Number(entry.stars) || 0 })),
+					sizeBadge,
 					h("span", { key: "grade", style: entry.grade === "caution" ? STYLE.badgeStale : STYLE.badge }, t("videoSkills.grade." + String(entry.grade)))
 				];
 				if (hit !== null) {
@@ -1186,6 +1266,13 @@ window.__ModuleLoader__.load({
 						metaBits.push(h("span", { key: "tick-" + target, style: STYLE.tick }, t("videoSkills.target." + target) + " ✓"));
 					});
 				}
+				/** One line per installed target: where it landed, how many files, and the disk usage /installed reports. */
+				var installedLines = hit === null || Array.isArray(hit.rows) !== true ? [] : hit.rows.map(function (row, at) {
+					var text = row.dir !== "" ? row.dir : String(row.target);
+					text += " · " + t("videoSkills.files", { n: row.files });
+					if (row.bytes > 0) text += " · " + t("videoSkills.installedBytes", { mb: (row.bytes / MIB).toFixed(1) });
+					return h("p", { key: "installed-" + String(at), style: STYLE.installedLine }, text);
+				});
 				var detail = repo;
 				if (typeof entry.kind === "string" && entry.kind !== "") detail += " · " + t("videoSkills.kind." + entry.kind);
 				if (typeof entry.license === "string" && entry.license !== "") detail += " · " + entry.license;
@@ -1221,7 +1308,11 @@ window.__ModuleLoader__.load({
 							h("span", { key: "meta", style: STYLE.meta }, metaBits)
 						]),
 						h("p", { key: "desc", style: STYLE.desc, title: descText }, descText),
-						line !== "" ? h("p", { key: "phase", style: STYLE.phase }, line) : null,
+						installedLines.length > 0 ? h("div", { key: "installed", style: STYLE.installedBox }, installedLines) : null,
+						line !== "" ? h("div", { key: "phase", style: STYLE.phaseBox }, [
+							h("span", { key: "text", style: STYLE.phase }, line),
+							downloading === true ? h("span", { key: "bar", style: STYLE.barTrack }, h("span", { className: "dsh-video-skills-progress", style: STYLE.barFill })) : null
+						]) : null,
 						failure !== "" ? h("p", { key: "error", style: STYLE.errorRow, role: "alert" }, failure) : null
 					]),
 					h("div", { key: "actions", style: STYLE.actions }, actions)
@@ -1243,7 +1334,8 @@ window.__ModuleLoader__.load({
 				more = h("span", { style: STYLE.hint }, t("videoSkills.noMore"));
 			}
 
-			var children = [header, targetBar, kindChips, controls, statusLine];
+			var keyframes = h("style", { key: "progress-keyframes" }, PROGRESS_CSS);
+			var children = [keyframes, header, targetBar, kindChips, controls, statusLine];
 			if (list !== null) children.push(list);
 			if (more !== null) children.push(h("div", { key: "more", style: STYLE.bar }, more));
 			return h("div", { style: STYLE.page }, children);

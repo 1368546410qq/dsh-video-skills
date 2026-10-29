@@ -96,6 +96,7 @@ export async function resolveDefineTool(load = () => import('@deepseek-ai/dsh-to
 }
 
 const nullableString = () => ({ oneOf: [{ type: 'string' }, { type: 'null' }] });
+const nullableNumber = () => ({ oneOf: [{ type: 'number' }, { type: 'null' }] });
 
 /** Public catalog entry shape, shared by both tools' output schemas. */
 export const ENTRY_SCHEMA = {
@@ -112,6 +113,7 @@ export const ENTRY_SCHEMA = {
     language: nullableString(),
     license: nullableString(),
     previewUrl: nullableString(),
+    sizeBytes: nullableNumber(),
   },
 };
 

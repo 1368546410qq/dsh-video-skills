@@ -185,6 +185,37 @@ export async function countFiles(dir) {
   return total;
 }
 
+/**
+ * Sum the bytes one skill directory occupies, skipping this plugin's own marker
+ * and the vendored trees an install never copies.
+ */
+export async function measureDir(dir) {
+  const stack = [dir];
+  let total = 0;
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let entries;
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (entry.name !== '.git' && entry.name !== 'node_modules') stack.push(path.join(current, entry.name));
+        continue;
+      }
+      if (!entry.isFile() || entry.name === MARKER_FILE) continue;
+      try {
+        total += (await fs.stat(path.join(current, entry.name))).size;
+      } catch {
+        /* a file that vanished costs its bytes, not the measurement */
+      }
+    }
+  }
+  return total;
+}
+
 /** Error carrying the fetch-failed code, so one catch site maps it. */
 class ArchiveError extends Error {}
 
@@ -421,6 +452,7 @@ export async function listInstalled(options = {}) {
           path: typeof marker.path === 'string' ? marker.path : null,
           installedAt: typeof marker.installedAt === 'string' ? marker.installedAt : null,
           files: Number.isFinite(marker.files) ? Number(marker.files) : await countFiles(dir),
+          bytes: await measureDir(dir),
           owned: true,
           external: false,
         });
@@ -435,6 +467,7 @@ export async function listInstalled(options = {}) {
         path: null,
         installedAt: null,
         files: await countFiles(dir),
+        bytes: await measureDir(dir),
         owned: false,
         external: true,
       });
@@ -502,7 +535,8 @@ export async function installSkill(options = {}) {
   const written = [];
   try {
     const archive = path.join(workspace, 'HEAD.tar.gz');
-    await downloadArchive(normalizedRepo, archive, fetchImpl, { signal, report });
+    const archiveBytes = await downloadArchive(normalizedRepo, archive, fetchImpl, { signal, report });
+    report({ phase: 'download', bytes: archiveBytes, archiveBytes });
 
     throwIfAborted(signal);
     let listing;
@@ -511,7 +545,7 @@ export async function installSkill(options = {}) {
     } catch (error) {
       throw new ArchiveError(messageOf(error));
     }
-    report({ phase: 'inspect', files: listing.entries });
+    report({ phase: 'inspect', files: listing.entries, archiveBytes });
 
     const repoName = normalizedRepo.split('/')[1];
     const skillDir = resolveSkillDir({ files: listing.files, repoName, requested: requestedPath });

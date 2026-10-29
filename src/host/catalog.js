@@ -7,6 +7,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sizeOf } from './sizes.js';
 
 /** Upstream JSON the catalog is read from. */
 export const CATALOG_URL = 'https://raw.githubusercontent.com/zhuyansen/awesome-claude-video-skills/HEAD/data/skills.json';
@@ -28,8 +29,8 @@ export function previewUrl(repo) {
   return `${PREVIEW_URL_BASE}/${String(repo).replace('/', '__')}.jpg`;
 }
 
-/** Map one upstream record onto the public entry shape. */
-export function mapEntry(raw) {
+/** Map one upstream record onto the public entry shape; `sizes` is the size store. */
+export function mapEntry(raw, sizes = null) {
   const repo = typeof raw?.repo_full_name === 'string' ? raw.repo_full_name : '';
   return {
     repo,
@@ -41,13 +42,15 @@ export function mapEntry(raw) {
     language: typeof raw?.language === 'string' && raw.language !== '' ? raw.language : null,
     license: typeof raw?.license === 'string' && raw.license !== '' ? raw.license : null,
     previewUrl: repo === '' ? null : previewUrl(repo),
+    sizeBytes: sizeOf(sizes, repo),
   };
 }
 
 /** Shape one upstream payload into the response body; entries keep upstream order. */
-export function normalizeCatalog(payload, { stale = false } = {}) {
+export function normalizeCatalog(payload, { stale = false, sizes = null } = {}) {
   const skills = Array.isArray(payload) ? payload : Array.isArray(payload?.skills) ? payload.skills : [];
-  const entries = skills.map(mapEntry);
+  const entries = skills.map((raw) => mapEntry(raw, sizes));
+  const known = sizes === null ? 0 : entries.filter((entry) => entry.sizeBytes !== null).length;
   return {
     ok: true,
     generated: typeof payload?.generated === 'string' ? payload.generated : null,
@@ -55,16 +58,17 @@ export function normalizeCatalog(payload, { stale = false } = {}) {
     stale,
     count: entries.length,
     entries,
+    sizes: { known, total: entries.length },
   };
 }
 
 /** Read the cached payload when it is still inside its TTL. */
-async function readCache(now) {
+async function readCache(now, sizes) {
   try {
     const cached = JSON.parse(await fs.readFile(CACHE_FILE, 'utf8'));
     if (!cached || typeof cached.fetchedAt !== 'number' || !cached.payload) return null;
     if (now - cached.fetchedAt > CACHE_TTL_MS) return null;
-    const body = normalizeCatalog(cached.payload);
+    const body = normalizeCatalog(cached.payload, { sizes });
     return body.count > 0 ? body : null;
   } catch {
     return null;
@@ -102,9 +106,9 @@ async function fetchUpstream(fetchImpl) {
 }
 
 /** Read the bundled snapshot, marked stale. */
-export async function readSnapshot() {
+export async function readSnapshot(sizes = null) {
   const payload = JSON.parse(await fs.readFile(SNAPSHOT_FILE, 'utf8'));
-  return normalizeCatalog(payload, { stale: true });
+  return normalizeCatalog(payload, { stale: true, sizes });
 }
 
 /**
@@ -112,26 +116,26 @@ export async function readSnapshot() {
  * Never rejects; an offline host gets the snapshot with `stale: true`.
  */
 export async function loadCatalog(options = {}) {
-  const { fetchImpl = globalThis.fetch, force = false, now = Date.now() } = options;
+  const { fetchImpl = globalThis.fetch, force = false, now = Date.now(), sizes = null } = options;
   if (!force) {
-    const cached = await readCache(now);
+    const cached = await readCache(now, sizes);
     if (cached) return cached;
   }
   try {
     const payload = await fetchUpstream(fetchImpl);
     await writeCache(payload, now);
-    return normalizeCatalog(payload);
+    return normalizeCatalog(payload, { sizes });
   } catch {
-    return readSnapshot();
+    return readSnapshot(sizes);
   }
 }
 
 /** Forced refetch for the refresh action; rejects so the caller can answer 502. */
 export async function refreshCatalog(options = {}) {
-  const { fetchImpl = globalThis.fetch, now = Date.now() } = options;
+  const { fetchImpl = globalThis.fetch, now = Date.now(), sizes = null } = options;
   const payload = await fetchUpstream(fetchImpl);
   await writeCache(payload, now);
-  return normalizeCatalog(payload);
+  return normalizeCatalog(payload, { sizes });
 }
 
 /**

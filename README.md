@@ -6,7 +6,7 @@ Chinese documentation: [README.zh-CN.md](./README.zh-CN.md)
 
 ## What the plugin adds
 
-- One page seat in the DSH settings UI (`key: video-skills`, `order: 900`): an **Install to** bar with `Claude` / `DSH` checkboxes (only `DSH` is checked by default and the choice is remembered in `localStorage`), an **installed only** filter, and the filter bar (kind chips, minimum stars, grade, license, search) over a list of at most 100 rows with "load more". Each row links to its GitHub repository and to the skill path inside it, shows live progress (`downloading <n> MB` / `unpacking` / `copying <n> files`) with a cancel button, ticks every installed target, and uninstalls in two clicks. Copy is bilingual — `zh-CN` default, `en-US` available — and every string lives in `locale/*.json`.
+- One page seat in the DSH settings UI (`key: video-skills`, `order: 900`): an **Install to** bar with `Claude` / `DSH` checkboxes (only `DSH` is checked by default and the choice is remembered in `localStorage`), an **installed only** filter, and the filter bar (kind chips, minimum stars, grade, license, search) over a list of at most 100 rows with "load more". Each row links to its GitHub repository and to the skill path inside it, carries an approximate repository-size badge (`≈ 27.4 MB`, or `—` while the size is not known yet), shows download progress as an indeterminate bar (`downloaded <n> MB`, then `archive <n> MB / <m> files`, then `copying <n> files`) with a cancel button, ticks every installed target, and uninstalls in two clicks. Copy is bilingual — `zh-CN` default, `en-US` available — and every string lives in `locale/*.json`.
 - Three model tools: `video_skill_search`, `video_skill_install` and `video_skill_uninstall`.
 - One HTTP prefix route, `/video-skills/api/v1`, that the page talks to. The route is served even when no tool registry is composed, and the tools are registered only when one is.
 
@@ -46,7 +46,7 @@ dsh plugin --profile <name> add link:/absolute/path/to/dsh-plugin-video-skills
 
 ## Tools
 
-Both tools work in any composition — CLI, TUI, or Web. Only the browse-and-install page needs the Web UI; without a web server the plugin simply registers the tools and mounts no HTTP route.
+All three tools work in any composition — CLI, TUI, or Web. Only the browse-and-install page needs the Web UI; without a web server the plugin simply registers the tools and mounts no HTTP route.
 
 ### `video_skill_search`
 
@@ -59,7 +59,7 @@ Both tools work in any composition — CLI, TUI, or Web. Only the browse-and-ins
 | `minStars` | integer | — | Only entries with at least this many stars. |
 | `limit` | integer | `20` | Page size, clamped to 1–100. |
 
-Returns `{ count, items }`: `count` is the number of matches before the page limit, `items` is the page sorted by stars descending. Each entry carries `repo`, `path`, `stars`, `description`, `kind`, `grade`, `language`, `license` and `previewUrl`.
+Returns `{ count, items }`: `count` is the number of matches before the page limit, `items` is the page sorted by stars descending. Each entry carries `repo`, `path`, `stars`, `description`, `kind`, `grade`, `language`, `license`, `previewUrl` and `sizeBytes`. `sizeBytes` is the cached GitHub repository size in bytes — the same value `GET /catalog` serves for the same entry, because the tools and the route share one catalog loader (`createToolCatalogLoader`). It is `null` while the cache holds no value for that repository yet, and the field is declared as a nullable number in the tool's output schema (see [Repository sizes](#repository-sizes)).
 
 ### `video_skill_install`
 
@@ -70,7 +70,7 @@ Returns `{ count, items }`: `count` is the number of matches before the page lim
 | `name` | string | detected | Override the installed skill directory name. |
 | `targets` | array of `claude` \| `dsh` | `["dsh"]` | Skill roots to install into; duplicates are dropped. |
 
-Returns the engine result — on success `{ ok: true, name, installed: [{ target, dir, files }], warnings: string[] }`; on failure `{ ok: false, error, message?, dir? }` with `error` one of `bad-repo`, `bad-targets`, `fetch-failed`, `no-skill-md`, `exists`. The tool runs the engine synchronously and reports no intermediate progress; the page uses `POST /install` and polls for that.
+Returns the engine result — on success `{ ok: true, name, installed: [{ target, dir, files }], warnings: string[] }`; on failure `{ ok: false, error, message?, dir? }` with `error` one of `bad-repo`, `bad-targets`, `fetch-failed`, `no-skill-md`, `exists`. The tool awaits the whole engine and returns only the final result — no job object and no intermediate progress; the page uses `POST /install` and polls the job for progress.
 
 ### `video_skill_uninstall`
 
@@ -88,7 +88,7 @@ Base path `/video-skills/api/v1`, same origin, no authentication. Every response
 | Method | Path | Success | Failure |
 | --- | --- | --- | --- |
 | `GET` | `/catalog` | `200` catalog payload | none — an unreachable upstream yields the bundled snapshot with `stale: true` |
-| `GET` | `/installed` | `200 {"ok":true,"items":[{"name","target","dir","repo","path","installedAt","files","owned","external"}]}` | none |
+| `GET` | `/installed` | `200 {"ok":true,"items":[{"name","target","dir","repo","path","installedAt","files","bytes","owned","external"}]}`; `bytes` is the measured on-disk size of the installed directory, counted without the marker file and without `.git`/`node_modules` | none |
 | `POST` | `/install` | `202 {"ok":true,"job"}` — the install runs in the background | `400` with `error` `bad-body`, `bad-repo` or `bad-targets`; `409 {"ok":false,"error":"busy"}` once eight jobs are running |
 | `GET` | `/install/<id>` | `200 {"ok":true,"job"}` | `404 {"ok":false,"error":"unknown-job"}` |
 | `POST` | `/install/<id>/cancel` | `200 {"ok":true,"job"}` — a settled job comes back unchanged | `404` `unknown-job` |
@@ -96,7 +96,7 @@ Base path `/video-skills/api/v1`, same origin, no authentication. Every response
 | `POST` | `/refresh` | `200 {"ok":true,"generated","count","stale":false}` | `502 {"ok":false,"error":"fetch-failed","message"}` |
 | any | any other path | — | `404 {"ok":false,"error":"not-found"}` |
 
-A job is `{ id, repo, targets, phase, bytes, files, copied, name, installed, warnings, error, message, startedAt, updatedAt }` where `phase` is one of `queued`, `download`, `inspect`, `extract`, `copy`, `done`, `error`, `cancelled`. `bytes` counts the archive received so far, `copied` the files written so far. Cancelling aborts the download and removes every directory the job had already written. At most 32 jobs are retained, a finished job stays readable for ten minutes. The page polls every 500 ms.
+A job is `{ id, repo, targets, phase, bytes, archiveBytes, files, copied, name, installed, warnings, error, message, startedAt, updatedAt }` where `phase` is one of `queued`, `download`, `inspect`, `extract`, `copy`, `done`, `error`, `cancelled`. `bytes` counts the archive received so far, `archiveBytes` is the final archive size and stays `null` until the download finishes, `copied` the files written so far. Cancelling aborts the download and removes every directory the job had already written. At most 32 jobs are retained, a finished job stays readable for ten minutes. The page polls every 500 ms.
 
 An exception inside the handler is answered as `500 {"ok":false,"error":"internal","message"}`.
 
@@ -119,13 +119,18 @@ Catalog payload:
       "grade": "safe",
       "language": "TypeScript",
       "license": "Apache-2.0",
-      "previewUrl": "https://raw.githubusercontent.com/zhuyansen/awesome-claude-video-skills/HEAD/assets/previews/heygen-com__hyperframes.jpg"
+      "previewUrl": "https://raw.githubusercontent.com/zhuyansen/awesome-claude-video-skills/HEAD/assets/previews/heygen-com__hyperframes.jpg",
+      "sizeBytes": 28762112
     }
-  ]
+  ],
+  "sizes": {
+    "known": 128,
+    "total": 373
+  }
 }
 ```
 
-`generated` is copied from upstream and may be `null`; `grade` is `safe` unless the catalog marks the entry `caution`.
+`generated` is copied from upstream and may be `null`; `grade` is `safe` unless the catalog marks the entry `caution`. `sizeBytes` and `sizes` are computed locally from the size cache: `sizes.known` counts the entries that carry a size and `sizes.total` is the catalog size — see [Repository sizes](#repository-sizes).
 
 ## Install targets and environment overrides
 
@@ -145,7 +150,7 @@ The directory name comes from the `name` parameter, then the `name` field of the
 
 Conflicts: a target directory with no marker, or whose marker names a different repository, is refused with `exists`. A marker for the same repository makes the install an overwrite.
 
-Progress and cancel: the engine reports `{ phase, bytes, files, copied }` at most ten times a second; cancelling throws away the temporary tree and every directory the job already copied into. A cancelled overwrite therefore does not restore the previous version — it is a cleanup, not a rollback.
+Progress and cancel: the engine reports `{ phase, bytes, archiveBytes, files, copied }` at most ten times a second, and at least 100 ms apart inside one phase, so a single job cannot flood the page. `bytes` grows while the archive streams in, but the total is unknown during the download: `codeload.github.com` sends no `Content-Length`, so the page renders an indeterminate bar instead of a percentage. When the download completes the job carries `archiveBytes`, and the finish line reports it together with the file count (`Archive <n> MB / <m> files`). Cancelling throws away the temporary tree and every directory the job already copied into. A cancelled overwrite therefore does not restore the previous version — it is a cleanup, not a rollback.
 
 Uninstall: only a directory carrying this plugin's marker is removed. `GET /installed` also lists skill roots it does not own — a directory with a `SKILL.md` but no marker comes back with `owned: false, external: true`, appears as an external entry in the page, and has no uninstall button.
 
@@ -169,11 +174,23 @@ DSH watches both skill roots, so a newly installed skill becomes available witho
 - `POST /refresh` skips the cache and answers `502` when the fetch fails.
 - Preview images are not bundled. `previewUrl` points at `https://raw.githubusercontent.com/zhuyansen/awesome-claude-video-skills/HEAD/assets/previews/<owner>__<repo>.jpg`.
 
+## Repository sizes
+
+The page shows how large a repository is before you download it. The number comes from GitHub, not from the archive.
+
+- Source: `GET https://api.github.com/repos/<owner>/<repo>`, field `size`. GitHub reports it in kilobytes and covers the whole repository including `.git`, so it is the repository size, not the size of the `tar.gz` the installer downloads — which is why the badge is written with a leading `≈`.
+- Cache file: `~/.dsh/video-skills/sizes.json`. An entry is reused for 7 days (`SIZE_TTL_MS`). A repository GitHub reports as missing — a `404`, or a `size` that is not a non-negative number — is remembered as missing for the same 7 days, and a reported `size` of `0` counts as unknown.
+- Warming: five repositories per batch (`SIZE_WARM_BATCH`): one batch at startup, one every 60 s (`SIZE_WARM_INTERVAL_MS`), and one more on every `GET /catalog` read. Unauthenticated GitHub allows 60 requests per hour, so a cold cache fills in roughly 60 repositories per hour; only repositories currently in the catalog are asked for.
+- Backoff: a batch stops as soon as GitHub answers `403` or `429`, or reports `x-ratelimit-remaining` at 5 or below (`RATE_LIMIT_FLOOR`). Warming then pauses until `x-ratelimit-reset`, or for 10 minutes when that header is absent. Three consecutive transport failures (`MAX_FAILURES`) abandon the batch; the next tick tries again.
+- Token: optional. `GITHUB_TOKEN`, or `GH_TOKEN` as a fallback, raises the quota. It is sent as a bearer token to `api.github.com` only — never to `codeload.github.com`, which serves the archives.
+- Unknown sizes: an entry with no usable size comes back with `sizeBytes: null`, the page shows `—`, and the tooltip says the size is not fetched yet. A repository GitHub answers `404` for is cached as missing, so it keeps showing `—` instead of being asked again on every batch. Nothing waits on a size: the catalog, the search and the installer work with the whole column empty.
+
 ## Repository layout
 
 ```
 src/host/index.js        Cordis plugin entry: the HTTP prefix route and tool registration
-src/host/catalog.js      fetch, 24 h cache, snapshot fallback, filtering
+src/host/catalog.js      fetch, 24 h cache, snapshot fallback, size join, filtering
+src/host/sizes.js        GitHub repository-size cache, TTL, and background warmer
 src/host/install.js      archive download, skill-directory detection, copy engine, uninstall
 src/host/jobs.js         in-memory install job table: progress, cancel, retention
 src/host/tool-schema.js  the three tool definitions

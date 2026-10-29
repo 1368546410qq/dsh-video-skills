@@ -57,5 +57,14 @@
   "videoSkills.targetHint": "至少要保留一个安装目标",
   "videoSkills.openRepo": "在 GitHub 打开仓库",
   "videoSkills.openPath": "路径",
-  "videoSkills.error.ownership": "该目录不属于本插件，无法卸载：{name}"
-}
+  "videoSkills.error.ownership": "该目录不属于本插件，无法卸载：{name}",
+  "videoSkills.sizeUnknown": "—",
+  "videoSkills.sizeHintKnown": "GitHub 仓库大小（含 .git），本地缓存 7 天",
+  "videoSkills.sizeHintUnknown": "尚未取得大小（后台预取，约每小时 60 条）",
+  "videoSkills.sizeCoverage": "共 {n} 个技能 · 大小 {known}/{total}",
+  "videoSkills.phase.queued": "排队中",
+  "videoSkills.phase.downloaded": "已下载 {mb} MB",
+  "videoSkills.phase.archive": "归档 {mb} MB / {n} 文件",
+  "videoSkills.installedBytes": "占用 {mb} MB",
+  "videoSkills.claudeTargetHint": "装到 Claude 目标不会出现在技能中心（它只扫 ~/.dsh/skills、~/.agents/skills），技能本身照常可用"
+  }

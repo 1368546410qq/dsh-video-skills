@@ -14,6 +14,7 @@ import {
   isSafeRelativePath,
   listInstalled,
   MARKER_FILE,
+  measureDir,
   MAX_ARCHIVE_BYTES,
   MAX_FILE_BYTES,
   normalizeArchivePath,
@@ -29,8 +30,18 @@ import {
   stripArchiveRoot,
   uninstallSkill,
 } from '../src/host/install.js';
-import { API_BASE, createHandler } from '../src/host/index.js';
+import { filterEntries, mapEntry, normalizeCatalog } from '../src/host/catalog.js';
+import { API_BASE, createHandler, createToolCatalogLoader, startSizes } from '../src/host/index.js';
 import { createJobStore, JOB_TTL_MS, MAX_RUNNING_JOBS } from '../src/host/jobs.js';
+import {
+  createSizeWarmer,
+  GITHUB_REPO_API,
+  loadSizeStore,
+  saveSizeStore,
+  sizeOf,
+  SIZE_TTL_MS,
+} from '../src/host/sizes.js';
+import { buildVideoTools, ENTRY_SCHEMA, localDefineTool } from '../src/host/tool-schema.js';
 
 test('pickSkillDir selects the shallowest SKILL.md', () => {
   const files = [
@@ -392,6 +403,7 @@ test('listInstalled reports owned and external skills and tolerates an old marke
     path: null,
     installedAt: '2026-01-01T00:00:00.000Z',
     files: 2,
+    bytes: 10,
     owned: true,
     external: false,
   });
@@ -405,6 +417,7 @@ test('listInstalled reports owned and external skills and tolerates an old marke
     path: null,
     installedAt: null,
     files: 1,
+    bytes: 10,
     owned: false,
     external: true,
   });
@@ -650,4 +663,146 @@ test('POST /uninstall maps owned, unowned and missing skills onto 200/409/404', 
   const noBody = await callRoute(handler, 'POST', '/uninstall');
   assert.equal(noBody.status, 400);
   assert.deepEqual(noBody.body, { ok: false, error: 'bad-body' });
+});
+test('GET /catalog answers with sizeBytes per entry and the warmer coverage', async () => {
+  const store = { entries: { 'owner/demo': { bytes: 1048576, at: Date.now() } } };
+  const repos = [];
+  const warmer = {
+    setRepos: (list) => repos.push(list),
+    warm: () => Promise.resolve({ fetched: 0, skipped: 0, blocked: false }),
+    coverage: () => ({ known: 1, total: 2 }),
+  };
+  const handler = createHandler({
+    sizes: store,
+    warmer,
+    loadCatalog: async ({ sizes }) =>
+      normalizeCatalog({ skills: [{ repo_full_name: 'owner/demo' }, { repo_full_name: 'owner/other' }] }, { sizes }),
+  });
+
+  const answer = await callRoute(handler, 'GET', '/catalog');
+  assert.equal(answer.status, 200);
+  assert.equal(answer.body.entries[0].sizeBytes, 1048576);
+  assert.equal(answer.body.entries[1].sizeBytes, null);
+  assert.deepEqual(answer.body.sizes, { known: 1, total: 2 });
+  assert.deepEqual(repos, [['owner/demo', 'owner/other']]);
+});
+
+test('a job folds the archive byte count into its snapshot', async () => {
+  const store = createJobStore();
+  const created = store.create({
+    repo: 'owner/demo',
+    targets: ['dsh'],
+    run: async ({ onProgress }) => {
+      onProgress({ phase: 'download', bytes: 4096, archiveBytes: 76000000 });
+      onProgress({ phase: 'inspect', files: 12 });
+      return { ok: true, name: 'demo', installed: [], warnings: [] };
+    },
+  });
+  assert.equal(created.job.archiveBytes, null);
+  await tick();
+  const done = store.get(created.job.id);
+  assert.equal(done.archiveBytes, 76000000);
+  assert.equal(done.bytes, 4096);
+  assert.equal(done.phase, 'done');
+});
+
+test('measureDir sums skill files and skips the marker, .git and node_modules', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'vs-measure-'));
+  const dir = path.join(workspace, 'skill');
+  await fs.mkdir(path.join(dir, '.git'), { recursive: true });
+  await fs.mkdir(path.join(dir, 'node_modules'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'SKILL.md'), '12345');
+  await fs.writeFile(path.join(dir, 'extra.md'), '1234');
+  await fs.writeFile(path.join(dir, MARKER_FILE), 'ignored');
+  await fs.writeFile(path.join(dir, '.git', 'config'), 'ignored');
+  await fs.writeFile(path.join(dir, 'node_modules', 'a.js'), 'ignored');
+
+  assert.equal(await measureDir(dir), 9);
+  assert.equal(await measureDir(path.join(workspace, 'absent')), 0);
+  await fs.rm(workspace, { recursive: true, force: true });
+});
+
+test('an install reports the archive byte count once the download ends', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'vs-archive-'));
+  const archive = await buildArchive(workspace);
+  const env = { DSH_VIDEO_SKILLS_CLAUDE_ROOT: path.join(workspace, 'claude-root') };
+  const seen = [];
+  const result = await installSkill({
+    repo: 'owner/demo',
+    targets: ['claude'],
+    env,
+    fetchImpl: stubFetch(archive),
+    onProgress: (progress) => {
+      if (Number.isFinite(progress.archiveBytes)) seen.push([progress.phase, progress.archiveBytes]);
+    },
+  });
+
+  const size = (await fs.stat(archive)).size;
+  assert.equal(result.ok, true);
+  assert.ok(seen.length >= 1, 'no progress carried archiveBytes');
+  assert.equal(seen[seen.length - 1][1], size);
+  assert.ok(Number.isFinite(seen[seen.length - 1][1]));
+  await fs.rm(workspace, { recursive: true, force: true });
+});
+test('video_skill_search keeps working with unknown sizes while the store is still null', async () => {
+  const seen = [];
+  const loader = createToolCatalogLoader(undefined, async (options) => {
+    seen.push(options.sizes);
+    return normalizeCatalog({ skills: [{ repo_full_name: 'owner/demo' }] }, options);
+  });
+  const [search] = buildVideoTools({
+    defineTool: localDefineTool,
+    loadCatalog: loader,
+    filterEntries,
+    installSkill: async () => ({}),
+    uninstallSkill: async () => ({}),
+  });
+
+  const value = await search.execute({});
+  assert.equal(seen[0], null);
+  assert.equal(value.items.length, 1);
+  assert.equal(value.items[0].sizeBytes, null);
+});
+
+test('video_skill_search reports the live size store bytes for every entry', async () => {
+  const store = { entries: { 'owner/demo': { bytes: 1048576, at: Date.now() } } };
+  const armed = [];
+  await startSizes(
+    { effect: (factory) => armed.push(factory) },
+    {
+      loadSizeStore: async () => store,
+      createSizeWarmer: () => ({
+        warm: () => Promise.resolve({ fetched: 0, skipped: 0, blocked: false }),
+        coverage: () => ({ known: 1, total: 2 }),
+        setRepos: () => {},
+      }),
+    },
+  );
+
+  const seen = [];
+  const loader = createToolCatalogLoader(undefined, async (options) => {
+    seen.push(options.sizes);
+    return normalizeCatalog(
+      { skills: [{ repo_full_name: 'owner/demo' }, { repo_full_name: 'owner/other' }] },
+      options,
+    );
+  });
+  const [search] = buildVideoTools({
+    defineTool: localDefineTool,
+    loadCatalog: loader,
+    filterEntries,
+    installSkill: async () => ({}),
+    uninstallSkill: async () => ({}),
+  });
+
+  const value = await search.execute({});
+  assert.equal(seen[0], store);
+  assert.equal(value.items[0].sizeBytes, 1048576);
+  assert.equal(value.items[1].sizeBytes, null);
+  assert.equal(armed.length, 1);
+});
+
+test('the shared entry schema declares the nullable size field', () => {
+  assert.deepEqual(ENTRY_SCHEMA.properties.sizeBytes, { oneOf: [{ type: 'number' }, { type: 'null' }] });
+  assert.equal(ENTRY_SCHEMA.additionalProperties, true);
 });
