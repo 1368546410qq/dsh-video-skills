@@ -42,5 +42,20 @@
   "videoSkills.kind.craft": "手艺",
   "videoSkills.kind.music": "音乐",
   "videoSkills.grade.safe": "安全",
-  "videoSkills.grade.caution": "需留意"
+  "videoSkills.grade.caution": "需留意",
+  "videoSkills.installTo": "安装到",
+  "videoSkills.filter.installedOnly": "只看已安装",
+  "videoSkills.phase.download": "下载中 {mb} MB",
+  "videoSkills.phase.unpack": "解包中",
+  "videoSkills.phase.copy": "拷贝 {n} 文件",
+  "videoSkills.cancel": "取消",
+  "videoSkills.cancelled": "已取消",
+  "videoSkills.uninstall": "卸载",
+  "videoSkills.uninstallConfirm": "确认卸载？",
+  "videoSkills.installedBadge": "已安装",
+  "videoSkills.external": "外部安装",
+  "videoSkills.targetHint": "至少要保留一个安装目标",
+  "videoSkills.openRepo": "在 GitHub 打开仓库",
+  "videoSkills.openPath": "路径",
+  "videoSkills.error.ownership": "该目录不属于本插件，无法卸载：{name}"
 }

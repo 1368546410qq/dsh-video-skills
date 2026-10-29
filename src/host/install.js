@@ -12,12 +12,14 @@ import { t as listArchive, x as extractArchive } from 'tar';
 
 /** Skill roots a user can install into. */
 export const SKILL_TARGETS = ['claude', 'dsh'];
+/** Targets an install lands in when the request names none. */
+export const DEFAULT_TARGETS = ['dsh'];
 /** Marker written inside every installed skill directory. */
 export const MARKER_FILE = '.dsh-video-skills.json';
 /** Per-file copy budget; larger files are skipped with a warning. */
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 /** Download budget for one archive. */
-export const MAX_ARCHIVE_BYTES = 80 * 1024 * 1024;
+export const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 /** Archive endpoint; HEAD follows the repository default branch. */
 export const ARCHIVE_URL_BASE = 'https://codeload.github.com';
 /** Environment override for the Claude skill root (printers and tests). */
@@ -67,7 +69,7 @@ export function normalizeRepo(input) {
 
 /** The install targets a request asked for, or null when the request is malformed. */
 export function normalizeTargets(input) {
-  const requested = input === undefined || input === null ? ['claude'] : input;
+  const requested = input === undefined || input === null ? DEFAULT_TARGETS : input;
   if (!Array.isArray(requested) || requested.length === 0) return null;
   const unique = [];
   for (const target of requested) {
@@ -169,7 +171,7 @@ export async function readMarker(dir) {
   }
 }
 
-/** Count the regular files a directory tree holds. */
+/** Count the skill files a directory tree holds, ignoring this plugin's own marker. */
 export async function countFiles(dir) {
   const stack = [dir];
   let total = 0;
@@ -177,29 +179,125 @@ export async function countFiles(dir) {
     const current = stack.pop();
     for (const entry of await fs.readdir(current, { withFileTypes: true })) {
       if (entry.isDirectory()) stack.push(path.join(current, entry.name));
-      else if (entry.isFile()) total += 1;
+      else if (entry.isFile() && entry.name !== MARKER_FILE) total += 1;
     }
   }
   return total;
 }
 
+/** Error carrying the fetch-failed code, so one catch site maps it. */
+class ArchiveError extends Error {}
+
+/** Marker error for a cancelled install; it never reaches a caller. */
+class CancelledError extends Error {
+  constructor() {
+    super('install cancelled');
+    this.cancelled = true;
+  }
+}
+
+/** The human-readable text of one thrown value. */
+function messageOf(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Whether a signal already asked this install to stop. */
+function aborted(signal) {
+  return signal !== null && signal !== undefined && signal.aborted === true;
+}
+
+/** Throw the cancellation marker when the signal is already aborted. */
+function throwIfAborted(signal) {
+  if (aborted(signal)) throw new CancelledError();
+}
+
+/** The fixed oversized-archive message; N is the byte count actually received. */
+export function archiveBudgetMessage(received) {
+  return 'archive exceeds the 512 MiB download budget (received ' + String(received) + ' bytes)';
+}
+
+/** Progress emitter that swallows callback errors and never exceeds 10 calls per second. */
+export function createProgressReporter(onProgress) {
+  if (typeof onProgress !== 'function') return () => {};
+  const stamps = [];
+  let lastPhase = null;
+  let lastEmit = 0;
+  return (progress) => {
+    const at = Date.now();
+    while (stamps.length > 0 && at - stamps[0] >= 1000) stamps.shift();
+    if (stamps.length >= 10) return;
+    const phaseChanged = progress.phase !== lastPhase;
+    if (!phaseChanged && at - lastEmit < 100) return;
+    stamps.push(at);
+    lastEmit = at;
+    lastPhase = progress.phase;
+    try {
+      onProgress(progress);
+    } catch {
+      /* a broken progress callback must not break the install */
+    }
+  };
+}
+
+/** Whether one path is a regular file. */
+async function isFile(candidate) {
+  try {
+    return (await fs.stat(candidate)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Whether one path exists at all. */
+async function pathExists(candidate) {
+  try {
+    await fs.access(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Download one repository archive into the workspace; returns the byte count. */
-async function downloadArchive(repo, destination, fetchImpl) {
-  const response = await fetchImpl(ARCHIVE_URL_BASE + '/' + repo + '/tar.gz/HEAD', {
-    headers: { 'user-agent': 'dsh-video-skills' },
-  });
+async function downloadArchive(repo, destination, fetchImpl, options = {}) {
+  const { signal = null, report = () => {} } = options;
+  throwIfAborted(signal);
+  let response;
+  try {
+    response = await fetchImpl(ARCHIVE_URL_BASE + '/' + repo + '/tar.gz/HEAD', {
+      headers: { 'user-agent': 'dsh-video-skills' },
+      signal: signal ?? undefined,
+    });
+  } catch (error) {
+    if (aborted(signal)) throw new CancelledError();
+    throw new ArchiveError('archive fetch failed: ' + messageOf(error));
+  }
   if (!response.ok || response.body === null || response.body === undefined) {
-    throw new Error('archive fetch failed: HTTP ' + response.status);
+    throw new ArchiveError('archive fetch failed: HTTP ' + response.status);
   }
   let total = 0;
   const budget = new Transform({
     transform(chunk, _encoding, done) {
+      if (aborted(signal)) {
+        done(new CancelledError());
+        return;
+      }
       total += chunk.length;
-      if (total > MAX_ARCHIVE_BYTES) done(new Error('archive exceeds the download budget'));
-      else done(null, chunk);
+      if (total > MAX_ARCHIVE_BYTES) {
+        done(new ArchiveError(archiveBudgetMessage(total)));
+        return;
+      }
+      report({ phase: 'download', bytes: total });
+      done(null, chunk);
     },
   });
-  await pipeline(Readable.fromWeb(response.body), budget, createWriteStream(destination));
+  try {
+    await pipeline(Readable.fromWeb(response.body), budget, createWriteStream(destination));
+  } catch (error) {
+    if (error instanceof CancelledError || aborted(signal)) throw new CancelledError();
+    if (error instanceof ArchiveError) throw error;
+    throw new ArchiveError(messageOf(error));
+  }
   return total;
 }
 
@@ -227,7 +325,7 @@ async function inspectArchive(file) {
     if (!isSafeRelativePath(relative)) throw new Error('archive entry escapes the extraction root: ' + entry.path);
     if (entry.type === 'File') files.push(relative);
   }
-  return { root, files };
+  return { root, files, entries: entries.length };
 }
 
 /** Extract the entries that belong to one scope; an empty scope means the whole root. */
@@ -246,7 +344,7 @@ async function extractScope(file, root, scope, destination) {
 }
 
 /** Copy one skill directory, applying the skip rules; returns the copied file count. */
-async function copySkillDir(sourceDir, destinationDir, warnings) {
+async function copySkillDir(sourceDir, destinationDir, warnings, { signal = null, report = () => {} } = {}) {
   const stack = [['', sourceDir]];
   let copied = 0;
   while (stack.length > 0) {
@@ -258,6 +356,7 @@ async function copySkillDir(sourceDir, destinationDir, warnings) {
       continue;
     }
     for (const entry of entries) {
+      throwIfAborted(signal);
       const relative = prefix === '' ? entry.name : prefix + '/' + entry.name;
       const absolute = path.join(dir, entry.name);
       if (entry.isDirectory()) {
@@ -277,6 +376,7 @@ async function copySkillDir(sourceDir, destinationDir, warnings) {
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.copyFile(absolute, target);
       copied += 1;
+      report({ phase: 'copy', copied });
     }
   }
   return copied;
@@ -296,89 +396,141 @@ async function readSkillName(dir) {
   }
 }
 
-/** Skill directories installed under the two target roots. */
+/** Skill directories under the two target roots, owned and external. */
 export async function listInstalled(options = {}) {
   const env = options.env ?? process.env;
   const items = [];
   for (const target of SKILL_TARGETS) {
     const root = skillRoot(target, env);
-    let names;
+    let entries;
     try {
-      names = await fs.readdir(root, { withFileTypes: true });
+      entries = await fs.readdir(root, { withFileTypes: true });
     } catch {
       continue;
     }
-    for (const entry of names) {
+    for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const dir = path.join(root, entry.name);
       const marker = await readMarker(dir);
-      if (marker === null) continue;
+      if (marker !== null) {
+        items.push({
+          name: entry.name,
+          target,
+          dir,
+          repo: typeof marker.repo === 'string' ? marker.repo : null,
+          path: typeof marker.path === 'string' ? marker.path : null,
+          installedAt: typeof marker.installedAt === 'string' ? marker.installedAt : null,
+          files: Number.isFinite(marker.files) ? Number(marker.files) : await countFiles(dir),
+          owned: true,
+          external: false,
+        });
+        continue;
+      }
+      if (!(await isFile(path.join(dir, 'SKILL.md')))) continue;
       items.push({
         name: entry.name,
         target,
         dir,
-        repo: typeof marker.repo === 'string' ? marker.repo : null,
-        installedAt: typeof marker.installedAt === 'string' ? marker.installedAt : null,
+        repo: null,
+        path: null,
+        installedAt: null,
+        files: await countFiles(dir),
+        owned: false,
+        external: true,
       });
     }
   }
   return items;
 }
 
+/** A directory name that can be looked up inside one skill root, or null. */
+export function normalizeUninstallName(input) {
+  const raw = typeof input === 'string' ? input.trim() : '';
+  if (raw === '' || raw.length > 128 || raw === '.' || raw === '..') return null;
+  if (raw.includes('\0') || raw.includes('/') || raw.includes('\\')) return null;
+  return /^[A-Za-z0-9._-]+$/.test(raw) ? raw : null;
+}
+
+/**
+ * Remove one skill directory, but only when this plugin's marker says it owns it.
+ * A directory someone copied in by hand has no marker and is left alone.
+ */
+export async function uninstallSkill(options = {}) {
+  const { name, target, env = process.env } = options;
+  const installedName = normalizeUninstallName(name);
+  if (installedName === null) return { ok: false, error: 'bad-name' };
+  if (!SKILL_TARGETS.includes(target)) return { ok: false, error: 'bad-target' };
+  const dir = path.join(skillRoot(target, env), installedName);
+  let stats;
+  try {
+    stats = await fs.stat(dir);
+  } catch {
+    return { ok: false, error: 'not-found' };
+  }
+  if (!stats.isDirectory()) return { ok: false, error: 'not-found' };
+  if ((await readMarker(dir)) === null) return { ok: false, error: 'not-owned' };
+  await fs.rm(dir, { recursive: true, force: true });
+  return { ok: true, removed: { name: installedName, target, dir } };
+}
+
 /**
  * Install one repository skill into one or more skill roots.
  * Refuses rather than overwriting a directory this plugin did not create.
+ * A cancelled install removes every directory it already copied into.
  */
 export async function installSkill(options = {}) {
   const {
     repo,
     path: requestedPath = null,
     name: requestedName = null,
-    targets = ['claude'],
+    targets = DEFAULT_TARGETS,
     fetchImpl = globalThis.fetch,
     env = process.env,
     now = new Date(),
+    signal = null,
+    onProgress = null,
   } = options;
 
   const normalizedRepo = normalizeRepo(repo);
   if (normalizedRepo === null) return { ok: false, error: 'bad-repo' };
   const targetList = normalizeTargets(targets);
   if (targetList === null) return { ok: false, error: 'bad-targets' };
+  if (aborted(signal)) return { ok: false, error: 'cancelled' };
 
+  const report = createProgressReporter(onProgress);
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-video-skills-'));
+  const written = [];
   try {
     const archive = path.join(workspace, 'HEAD.tar.gz');
-    try {
-      await downloadArchive(normalizedRepo, archive, fetchImpl);
-    } catch (error) {
-      return { ok: false, error: 'fetch-failed', message: error instanceof Error ? error.message : String(error) };
-    }
+    await downloadArchive(normalizedRepo, archive, fetchImpl, { signal, report });
 
+    throwIfAborted(signal);
     let listing;
     try {
       listing = await inspectArchive(archive);
     } catch (error) {
-      return { ok: false, error: 'fetch-failed', message: error instanceof Error ? error.message : String(error) };
+      throw new ArchiveError(messageOf(error));
     }
+    report({ phase: 'inspect', files: listing.entries });
 
     const repoName = normalizedRepo.split('/')[1];
     const skillDir = resolveSkillDir({ files: listing.files, repoName, requested: requestedPath });
     if (skillDir === null) return { ok: false, error: 'no-skill-md' };
 
+    throwIfAborted(signal);
     const extractRoot = path.join(workspace, 'tree');
-    await extractScope(archive, listing.root, skillDir, extractRoot);
+    try {
+      await extractScope(archive, listing.root, skillDir, extractRoot);
+    } catch (error) {
+      throw new ArchiveError(messageOf(error));
+    }
+    report({ phase: 'extract', files: listing.entries });
+
     const sourceDir =
       skillDir === ''
         ? path.join(extractRoot, listing.root)
         : path.join(extractRoot, listing.root, ...skillDir.split('/'));
-
-    let skillMdPresent = true;
-    try {
-      await fs.access(path.join(sourceDir, 'SKILL.md'));
-    } catch {
-      skillMdPresent = false;
-    }
-    if (!skillMdPresent) return { ok: false, error: 'no-skill-md' };
+    if (!(await isFile(path.join(sourceDir, 'SKILL.md')))) return { ok: false, error: 'no-skill-md' };
 
     const fallbackName = skillDir === '' ? repoName : skillDir.split('/').pop();
     const installedName =
@@ -393,12 +545,8 @@ export async function installSkill(options = {}) {
     }));
 
     for (const destination of destinations) {
-      let dirExists = true;
-      try {
-        await fs.access(destination.dir);
-      } catch {
-        dirExists = false;
-      }
+      throwIfAborted(signal);
+      const dirExists = await pathExists(destination.dir);
       const marker = dirExists ? await readMarker(destination.dir) : null;
       if (resolveConflict({ dirExists, marker, repo: normalizedRepo }) === 'exists') {
         return { ok: false, error: 'exists', dir: destination.dir };
@@ -408,8 +556,10 @@ export async function installSkill(options = {}) {
     const warnings = [];
     const installed = [];
     for (const destination of destinations) {
+      throwIfAborted(signal);
       await fs.mkdir(destination.dir, { recursive: true });
-      const files = await copySkillDir(sourceDir, destination.dir, warnings);
+      written.push(destination.dir);
+      const files = await copySkillDir(sourceDir, destination.dir, warnings, { signal, report });
       await writeMarker(destination.dir, {
         repo: normalizedRepo,
         path: requestedPath ?? null,
@@ -421,6 +571,15 @@ export async function installSkill(options = {}) {
     }
 
     return { ok: true, name: installedName, installed, warnings: [...new Set(warnings)] };
+  } catch (error) {
+    if (error instanceof CancelledError || aborted(signal)) {
+      for (const dir of written) {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+      return { ok: false, error: 'cancelled' };
+    }
+    if (error instanceof ArchiveError) return { ok: false, error: 'fetch-failed', message: error.message };
+    throw error;
   } finally {
     await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
   }

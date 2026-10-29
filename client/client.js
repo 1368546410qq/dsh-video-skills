@@ -36,6 +36,7 @@ window.__ModuleLoader__.load({
 		var useEffect = React.useEffect;
 		var useMemo = React.useMemo;
 		var useCallback = React.useCallback;
+		var useRef = React.useRef;
 
 		/** Locale namespace this package registers (also the page seat locale field). */
 		var NS = "dsh-video-skills";
@@ -53,6 +54,16 @@ window.__ModuleLoader__.load({
 		var ROW_LIMIT = 100;
 		var PAGE_STEP = 20;
 		var TARGETS = ["claude", "dsh"];
+		/** CONTRACT v2 default: a fresh install goes to DSH unless the user says otherwise. */
+		var DEFAULT_TARGETS = ["dsh"];
+		/** localStorage key holding the install-target selection as a JSON array. */
+		var TARGETS_KEY = "dsh-video-skills.targets";
+		/** Poll cadence of one background install job, in milliseconds. */
+		var POLL_MS = 500;
+		/** Bytes per MiB, for the download phase line. */
+		var MIB = 1048576;
+		/** Public web root of a catalog repository. */
+		var GITHUB = "https://github.com/";
 		var KINDS = ["general", "promo", "explainer", "editing", "shorts", "avatar", "story", "motion", "craft", "music"];
 		var GRADES = ["safe", "caution"];
 
@@ -101,7 +112,22 @@ window.__ModuleLoader__.load({
 			"videoSkills.kind.craft": "手艺",
 			"videoSkills.kind.music": "音乐",
 			"videoSkills.grade.safe": "安全",
-			"videoSkills.grade.caution": "需留意"
+			"videoSkills.grade.caution": "需留意",
+			"videoSkills.installTo": "安装到",
+			"videoSkills.filter.installedOnly": "只看已安装",
+			"videoSkills.phase.download": "下载中 {mb} MB",
+			"videoSkills.phase.unpack": "解包中",
+			"videoSkills.phase.copy": "拷贝 {n} 文件",
+			"videoSkills.cancel": "取消",
+			"videoSkills.cancelled": "已取消",
+			"videoSkills.uninstall": "卸载",
+			"videoSkills.uninstallConfirm": "确认卸载？",
+			"videoSkills.installedBadge": "已安装",
+			"videoSkills.external": "外部安装",
+			"videoSkills.targetHint": "至少要保留一个安装目标",
+			"videoSkills.openRepo": "在 GitHub 打开仓库",
+			"videoSkills.openPath": "路径",
+			"videoSkills.error.ownership": "该目录不属于本插件，无法卸载：{name}"
 		};
 
 		/** English copy — mirrors locale/en-US.json key for key. */
@@ -149,7 +175,22 @@ window.__ModuleLoader__.load({
 			"videoSkills.kind.craft": "Craft",
 			"videoSkills.kind.music": "Music",
 			"videoSkills.grade.safe": "Safe",
-			"videoSkills.grade.caution": "Caution"
+			"videoSkills.grade.caution": "Caution",
+			"videoSkills.installTo": "Install to",
+			"videoSkills.filter.installedOnly": "Installed only",
+			"videoSkills.phase.download": "Downloading {mb} MB",
+			"videoSkills.phase.unpack": "Unpacking",
+			"videoSkills.phase.copy": "Copying {n} files",
+			"videoSkills.cancel": "Cancel",
+			"videoSkills.cancelled": "Cancelled",
+			"videoSkills.uninstall": "Uninstall",
+			"videoSkills.uninstallConfirm": "Uninstall?",
+			"videoSkills.installedBadge": "Installed",
+			"videoSkills.external": "External",
+			"videoSkills.targetHint": "Keep at least one install target selected",
+			"videoSkills.openRepo": "Open the repository on GitHub",
+			"videoSkills.openPath": "Path",
+			"videoSkills.error.ownership": "That directory was not installed by this plugin: {name}"
 		};
 
 				var STYLE = {
@@ -168,7 +209,9 @@ window.__ModuleLoader__.load({
 			item: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", gap: "10px", padding: "6px 0", borderTop: "1px solid color-mix(in srgb, currentColor 13%, transparent)" },
 			body: { display: "flex", flexDirection: "column", gap: "1px", minWidth: 0 },
 			head: { display: "flex", alignItems: "baseline", gap: "0 8px", minWidth: 0 },
-			repo: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: "12.5px", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "0 1 auto", minWidth: 0 },
+			repoLink: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: "12.5px", fontWeight: 600, color: "inherit", textDecoration: "none", borderBottom: "1px dotted color-mix(in srgb, currentColor 38%, transparent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "0 1 auto", minWidth: 0 },
+			pathLink: { fontSize: "10.5px", color: "var(--dsh-accent, #4f8cff)", textDecoration: "none", whiteSpace: "nowrap", flex: "0 0 auto" },
+			tick: { fontSize: "10.5px", color: "#2f9e5f", whiteSpace: "nowrap" },
 			desc: { margin: 0, fontSize: "12px", color: "color-mix(in srgb, currentColor 78%, transparent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
 			meta: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "5px", fontSize: "10.5px", color: "color-mix(in srgb, currentColor 70%, transparent)", flex: "0 0 auto", marginLeft: "auto" },
 			badge: { padding: "0 5px", borderRadius: "4px", border: "1px solid color-mix(in srgb, currentColor 20%, transparent)", fontSize: "10.5px", lineHeight: "15px" },
@@ -176,10 +219,13 @@ window.__ModuleLoader__.load({
 			badgeStale: { padding: "0 5px", borderRadius: "4px", border: "1px solid rgba(210,150,40,0.55)", background: "rgba(210,150,40,0.14)", color: "#a97614", fontSize: "10.5px", lineHeight: "15px" },
 			actions: { display: "flex", alignItems: "center", gap: "8px", flex: "0 0 auto" },
 			error: { color: "#d4382f", fontSize: "12px", margin: 0 },
-			errorRow: { color: "#d4382f", fontSize: "10.5px", maxWidth: "190px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+			errorRow: { color: "#d4382f", fontSize: "11px", margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" },
+			phase: { fontSize: "11px", color: "color-mix(in srgb, currentColor 74%, transparent)" },
+			targetHint: { fontSize: "11px", color: "#a97614" },
 			hint: { margin: 0, fontSize: "12px", color: "color-mix(in srgb, currentColor 74%, transparent)" },
-			radio: { display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "11px", cursor: "pointer", color: "color-mix(in srgb, currentColor 88%, transparent)" },
-			radioInput: { margin: 0, accentColor: "var(--dsh-accent, #4f8cff)" }
+			buttonDanger: { padding: "3px 10px", borderRadius: "6px", border: "1px solid rgba(212,56,47,0.6)", background: "rgba(212,56,47,0.1)", color: "#d4382f", cursor: "pointer", fontSize: "12.5px" },
+			check: { display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "11px", cursor: "pointer", color: "color-mix(in srgb, currentColor 88%, transparent)" },
+			checkInput: { margin: 0, accentColor: "var(--dsh-accent, #4f8cff)" }
 		};
 
 		/** Substitute {name} placeholders; an unknown placeholder is left verbatim. */
@@ -417,28 +463,231 @@ window.__ModuleLoader__.load({
 			return t("videoSkills.error.install", { message: "HTTP " + String(result !== undefined && result !== null ? result.status : "?") });
 		}
 
-		/** The catalog page: filter bar, at most 100 rows, per-row install control. */
+		/** Shallow copy of a plain map with one key replaced, or dropped when value is undefined. */
+		function patchMap(map, name, value) {
+			var next = {};
+			for (var key in map) {
+				if (Object.prototype.hasOwnProperty.call(map, key) && key !== name) next[key] = map[key];
+			}
+			if (value !== undefined) next[name] = value;
+			return next;
+		}
+
+		/** The row view of one host Job: only what the row renders survives, plus the local cancelling flag. */
+		function jobView(job, previous) {
+			var source = job !== null && job !== undefined && typeof job === "object" ? job : {};
+			var prior = previous !== null && previous !== undefined ? previous : { id: "", cancelling: false };
+			return {
+				id: typeof source.id === "string" && source.id !== "" ? source.id : prior.id,
+				phase: typeof source.phase === "string" ? source.phase : "",
+				bytes: Number(source.bytes) || 0,
+				files: Number(source.files) || 0,
+				copied: Number(source.copied) || 0,
+				message: typeof source.message === "string" ? source.message : "",
+				error: typeof source.error === "string" ? source.error : "",
+				cancelling: prior.cancelling === true
+			};
+		}
+
+		/** Copy of one row view: state is never mutated in place. */
+		function copyJob(view) {
+			return {
+				id: view.id,
+				phase: view.phase,
+				bytes: view.bytes,
+				files: view.files,
+				copied: view.copied,
+				message: view.message,
+				error: view.error,
+				cancelling: view.cancelling === true
+			};
+		}
+
+		/** A phase no longer changes: polling stops and the cancel control disappears. */
+		function isTerminal(phase) {
+			return phase === "done" || phase === "error" || phase === "cancelled";
+		}
+
+		/** A job the host accepted and has not finished yet. */
+		function isRunning(job) {
+			return job !== null && job !== undefined && typeof job.phase === "string" && job.phase !== "" && isTerminal(job.phase) !== true;
+		}
+
+		/**
+		* The one line an install job renders. done and error carry none: done clears the
+		* phase and refreshes /installed, error renders the host message in full instead.
+		*/
+		function phaseText(t, job) {
+			if (job === null || job === undefined || typeof job !== "object") return "";
+			var phase = job.phase;
+			if (phase === "queued" || phase === "download") return t("videoSkills.phase.download", { mb: ((Number(job.bytes) || 0) / MIB).toFixed(1) });
+			if (phase === "inspect" || phase === "extract") return t("videoSkills.phase.unpack");
+			if (phase === "copy") return t("videoSkills.phase.copy", { n: Number(job.copied) || 0 });
+			if (phase === "cancelled") return t("videoSkills.cancelled");
+			return "";
+		}
+
+		/** The full host failure text of one job: never truncated, never replaced by a code. */
+		function jobErrorText(t, job) {
+			if (job !== null && job !== undefined && typeof job.message === "string" && job.message !== "") return job.message;
+			if (job !== null && job !== undefined && typeof job.error === "string" && job.error !== "") return t("videoSkills.error.install", { message: job.error });
+			return t("videoSkills.error.install", { message: "error" });
+		}
+
+		/** Map an /uninstall failure onto one inline line; the host text wins, ownership is spelled out. */
+		function uninstallErrorText(t, result, name) {
+			var body = result !== null && result !== undefined ? result.body : null;
+			if (body !== null && typeof body === "object") {
+				if (body.error === "not-owned") return t("videoSkills.error.ownership", { name: typeof body.name === "string" && body.name !== "" ? body.name : name });
+				if (typeof body.message === "string" && body.message !== "") return body.message;
+				if (typeof body.error === "string" && body.error !== "") return body.error + " (HTTP " + String(result.status) + ")";
+			}
+			return "HTTP " + String(result !== undefined && result !== null ? result.status : "?");
+		}
+
+		/** GitHub home of one catalog entry. */
+		function repoUrl(repo) {
+			return GITHUB + String(repo);
+		}
+
+		/** GitHub tree URL of the catalog entry subdirectory, when it has one. */
+		function pathUrl(repo, path) {
+			return GITHUB + String(repo) + "/tree/HEAD/" + String(path);
+		}
+
+		/** Last non-empty path segment of a repo or a skill path. */
+		function leafName(value) {
+			if (typeof value !== "string" || value === "") return "";
+			var parts = value.split("/");
+			for (var index = parts.length - 1; index >= 0; index -= 1) {
+				if (parts[index] !== "") return parts[index];
+			}
+			return "";
+		}
+
+		/** Keep only known targets, in contract order: storage may hold anything. */
+		function normalizeTargets(value) {
+			var output = [];
+			if (!Array.isArray(value)) return output;
+			for (var index = 0; index < TARGETS.length; index += 1) {
+				if (value.indexOf(TARGETS[index]) >= 0) output.push(TARGETS[index]);
+			}
+			return output;
+		}
+
+		/** The storage holding the target selection, or null when the browser refuses one. */
+		function targetStorage() {
+			try {
+				if (typeof localStorage !== "undefined" && localStorage !== null && typeof localStorage.getItem === "function") return localStorage;
+			} catch (error) {
+				/* a privacy-mode getter can throw; window.localStorage may still answer */
+			}
+			try {
+				if (typeof window !== "undefined" && window !== null && window.localStorage !== null && typeof window.localStorage === "object") return window.localStorage;
+			} catch (error) {
+				/* no storage at all is a valid browser state */
+			}
+			return null;
+		}
+
+		/** Read the stored target selection; an unreadable or empty choice falls back to the default. */
+		function readTargets() {
+			var fallback = DEFAULT_TARGETS.slice();
+			var store = targetStorage();
+			if (store === null) return fallback;
+			try {
+				var raw = store.getItem(TARGETS_KEY);
+				if (typeof raw !== "string" || raw === "") return fallback;
+				var list = normalizeTargets(JSON.parse(raw));
+				return list.length > 0 ? list : fallback;
+			} catch (error) {
+				return fallback;
+			}
+		}
+
+		/** Persist the target selection; a full or disabled store leaves the in-memory choice intact. */
+		function writeTargets(list) {
+			var store = targetStorage();
+			if (store === null) return;
+			try {
+				store.setItem(TARGETS_KEY, JSON.stringify(list));
+			} catch (error) {
+				/* storage is a convenience here, not the source of truth */
+			}
+		}
+
+		/**
+		* Index /installed by name (the contract shape) and keep a repo alias: the skills
+		* root knows a directory name while a catalog row knows its repository.
+		*/
+		function indexInstalled(items) {
+			var byName = {};
+			var byRepo = {};
+			var list = Array.isArray(items) ? items : [];
+			for (var index = 0; index < list.length; index += 1) {
+				var item = list[index];
+				if (item === null || typeof item !== "object" || typeof item.name !== "string" || item.name === "") continue;
+				var group = byName[item.name];
+				if (group === undefined) {
+					group = { name: item.name, targets: [], owned: [], external: false, repo: null, path: null };
+					byName[item.name] = group;
+				}
+				if (typeof item.target === "string" && group.targets.indexOf(item.target) < 0) group.targets.push(item.target);
+				if (item.owned === true && typeof item.target === "string" && group.owned.indexOf(item.target) < 0) group.owned.push(item.target);
+				if (item.external === true) group.external = true;
+				if (typeof item.repo === "string" && item.repo !== "") group.repo = item.repo;
+				if (typeof item.path === "string" && item.path !== "") group.path = item.path;
+				if (typeof item.repo === "string" && item.repo !== "" && byRepo[item.repo] === undefined) byRepo[item.repo] = group.name;
+			}
+			return { byName: byName, byRepo: byRepo };
+		}
+
+		/** The installed projection of one catalog row, or null when nothing of it is installed. */
+		function installedFor(index, entry) {
+			if (entry === null || typeof entry !== "object") return null;
+			var candidates = [];
+			if (typeof entry.name === "string" && entry.name !== "") candidates.push(entry.name);
+			if (typeof entry.repo === "string" && entry.repo !== "" && index.byRepo[entry.repo] !== undefined) candidates.push(index.byRepo[entry.repo]);
+			if (typeof entry.path === "string" && entry.path !== "") candidates.push(leafName(entry.path));
+			if (typeof entry.repo === "string" && entry.repo !== "") candidates.push(leafName(entry.repo));
+			for (var index2 = 0; index2 < candidates.length; index2 += 1) {
+				var hit = index.byName[candidates[index2]];
+				if (hit !== undefined) return hit;
+			}
+			return null;
+		}
+
+		/** The catalog page: target bar, filter bar, at most 100 rows, per-row install job and uninstall control. */
 		function VideoSkillsPage(props) {
 			var t = props !== undefined && props !== null && typeof props.t === "function" ? props.t : translator(undefined);
 
 			var snapshotState = useState({ status: "loading", entries: [], stale: false, generated: "", error: "" });
 			var snapshot = snapshotState[0];
 			var setSnapshot = snapshotState[1];
-			var installedState = useState({});
+			var installedState = useState({ byName: {}, byRepo: {} });
 			var installed = installedState[0];
 			var setInstalled = installedState[1];
+			var jobsState = useState({});
+			var jobs = jobsState[0];
+			var setJobs = jobsState[1];
+			var confirmingState = useState("");
+			var confirming = confirmingState[0];
+			var setConfirming = confirmingState[1];
+			var targetState = useState(readTargets());
+			var targets = targetState[0];
+			var setTargets = targetState[1];
+			var hintState = useState("");
+			var hint = hintState[0];
+			var setHint = hintState[1];
+			var onlyInstalledState = useState(false);
+			var onlyInstalled = onlyInstalledState[0];
+			var setOnlyInstalled = onlyInstalledState[1];
 			var filterState = useState({ kinds: [], minStars: 0, grade: "", license: "", search: "" });
 			var filters = filterState[0];
 			var setFilters = filterState[1];
 			var visibleState = useState(PAGE_STEP);
 			var visible = visibleState[0];
 			var setVisible = visibleState[1];
-			var pendingState = useState({});
-			var pending = pendingState[0];
-			var setPending = pendingState[1];
-			var targetState = useState({});
-			var targetChoice = targetState[0];
-			var setTargetChoice = targetState[1];
 			var rowErrorState = useState({});
 			var rowErrors = rowErrorState[0];
 			var setRowErrors = rowErrorState[1];
@@ -446,11 +695,48 @@ window.__ModuleLoader__.load({
 			var refreshing = refreshingState[0];
 			var setRefreshing = refreshingState[1];
 
+			/** Timer ids this page owns; the unmount cleanup empties it, so no poll outlives the page. */
+			var runtime = useRef({ alive: true, timers: [] });
+
+			var alive = function () {
+				return runtime.current.alive === true;
+			};
+
+			var clearTimers = function () {
+				var ids = runtime.current.timers;
+				for (var index = 0; index < ids.length; index += 1) {
+					try {
+						clearTimeout(ids[index]);
+					} catch (error) {
+						/* a cleared id is already harmless */
+					}
+				}
+				runtime.current.timers = [];
+			};
+
+			/** One tracked setTimeout: firing untracks itself, and never runs after unmount. */
+			var later = function (fn, ms) {
+				var id = setTimeout(function () {
+					var ids = runtime.current.timers;
+					var at = ids.indexOf(id);
+					if (at >= 0) ids.splice(at, 1);
+					if (runtime.current.alive !== true) return;
+					try {
+						fn();
+					} catch (error) {
+						/* one failing poll must not stop the rest of the page */
+					}
+				}, ms);
+				runtime.current.timers.push(id);
+				return id;
+			};
+
 			var loadCatalog = useCallback(function () {
 				setSnapshot(function (previous) {
 					return { status: "loading", entries: previous.entries, stale: previous.stale, generated: previous.generated, error: "" };
 				});
 				requestJson("/catalog", { method: "GET" }).then(function (result) {
+					if (!alive()) return;
 					var body = result.body;
 					if (result.ok !== true || body === null || body.ok !== true) {
 						setSnapshot({ status: "error", entries: [], stale: false, generated: "", error: t("videoSkills.error.load", { message: "HTTP " + String(result.status) }) });
@@ -464,6 +750,7 @@ window.__ModuleLoader__.load({
 						error: ""
 					});
 				}, function (error) {
+					if (!alive()) return;
 					setSnapshot({
 						status: "error",
 						entries: [],
@@ -476,28 +763,27 @@ window.__ModuleLoader__.load({
 
 			var loadInstalled = useCallback(function () {
 				requestJson("/installed", { method: "GET" }).then(function (result) {
+					if (!alive()) return;
 					var body = result.body;
 					if (result.ok !== true || body === null || body.ok !== true || !Array.isArray(body.items)) return;
-					var next = {};
-					for (var index = 0; index < body.items.length; index += 1) {
-						var item = body.items[index];
-						if (item === null || typeof item !== "object" || typeof item.repo !== "string") continue;
-						if (next[item.repo] === undefined) next[item.repo] = [];
-						if (typeof item.target === "string" && next[item.repo].indexOf(item.target) < 0) next[item.repo].push(item.target);
-					}
-					setInstalled(next);
+					setInstalled(indexInstalled(body.items));
 				}, function () {
 					/* the installed badge is decoration: a failure leaves it empty, never blocks the page */
 				});
 			}, []);
 
 			useEffect(function () {
+				runtime.current.alive = true;
 				try {
 					loadCatalog();
 					loadInstalled();
 				} catch (error) {
 					/* a throwing effect would blank the page; the inline error state carries it */
 				}
+				return function () {
+					runtime.current.alive = false;
+					clearTimers();
+				};
 			}, [loadCatalog, loadInstalled]);
 
 			var refresh = function () {
@@ -523,6 +809,189 @@ window.__ModuleLoader__.load({
 				}
 			};
 
+			/** Replace (or drop, with undefined) the job view of one row. */
+			var updateJob = function (repo, value) {
+				setJobs(function (previous) {
+					var current = previous[repo];
+					var next = typeof value === "function" ? value(current) : value;
+					if (next === undefined || next === null) return patchMap(previous, repo, undefined);
+					return patchMap(previous, repo, next);
+				});
+			};
+
+			/** Describe a failed /install/<id> read as the row error it is. */
+			var jobReadError = function (repo, status) {
+				updateJob(repo, function (previous) {
+					if (previous === undefined) return undefined;
+					var next = copyJob(previous);
+					next.phase = "error";
+					next.message = t("videoSkills.error.install", { message: "HTTP " + String(status) });
+					return next;
+				});
+			};
+
+			/** One 500 ms step of the job poll: a terminal phase ends the chain, everything else reschedules. */
+			var pollJob = function (repo, id) {
+				if (!alive() || typeof id !== "string" || id === "") return;
+				later(function () {
+					requestJson("/install/" + encodeURIComponent(id), { method: "GET" }).then(function (result) {
+						if (!alive()) return;
+						var body = result.body === undefined ? null : result.body;
+						var job = body !== null && typeof body === "object" && body.ok === true && body.job !== null && typeof body.job === "object" ? body.job : null;
+						if (job === null) {
+							jobReadError(repo, result.status);
+							return;
+						}
+						var view = jobView(job, undefined);
+						if (view.phase === "done") {
+							updateJob(repo, undefined);
+							loadInstalled();
+							return;
+						}
+						setJobs(function (previous) {
+							return patchMap(previous, repo, jobView(job, previous[repo]));
+						});
+						if (isTerminal(view.phase)) return;
+						pollJob(repo, view.id !== "" ? view.id : id);
+					}, function (error) {
+						if (!alive()) return;
+						jobReadError(repo, error !== null && error !== undefined && error.network === true ? t("videoSkills.error.network") : String(error !== null && error !== undefined ? error.message : error));
+					});
+				});
+			};
+
+			var install = function (entry) {
+				var repo = String(entry.repo === undefined ? "" : entry.repo);
+				var chosen = normalizeTargets(targets);
+				if (chosen.length === 0) {
+					setHint(t("videoSkills.targetHint"));
+					return;
+				}
+				setConfirming("");
+				setRowErrors(function (previous) {
+					return patchMap(previous, repo, undefined);
+				});
+				var payload = { repo: repo, targets: chosen };
+				if (typeof entry.path === "string" && entry.path !== "") payload.path = entry.path;
+				if (typeof entry.name === "string" && entry.name !== "") payload.name = entry.name;
+				try {
+					requestJson("/install", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }).then(function (result) {
+						if (!alive()) return;
+						var body = result.body === undefined ? null : result.body;
+						if (result.ok !== true || body === null || typeof body !== "object" || body.ok !== true || body.job === null || typeof body.job !== "object") {
+							setRowErrors(function (previous) {
+								return patchMap(previous, repo, installErrorText(t, result));
+							});
+							return;
+						}
+						var view = jobView(body.job, undefined);
+						updateJob(repo, view);
+						if (view.phase === "done") {
+							updateJob(repo, undefined);
+							loadInstalled();
+							return;
+						}
+						if (isTerminal(view.phase) !== true) pollJob(repo, view.id);
+					}, function (error) {
+						if (!alive()) return;
+						setRowErrors(function (previous) {
+							return patchMap(previous, repo, error !== null && error !== undefined && error.network === true ? t("videoSkills.error.network") : t("videoSkills.error.install", { message: String(error !== null && error !== undefined ? error.message : error) }));
+						});
+					});
+				} catch (error) {
+					setRowErrors(function (previous) {
+						return patchMap(previous, repo, t("videoSkills.error.install", { message: String(error !== null && error !== undefined ? error.message : error) }));
+					});
+				}
+			};
+
+			var cancelJob = function (repo) {
+				var job = jobs[repo];
+				if (job === undefined || isRunning(job) !== true || job.cancelling === true) return;
+				updateJob(repo, function (previous) {
+					var next = copyJob(previous);
+					next.cancelling = true;
+					return next;
+				});
+				try {
+					requestJson("/install/" + encodeURIComponent(job.id) + "/cancel", { method: "POST" }).then(function (result) {
+						if (!alive()) return;
+						var body = result.body === undefined ? null : result.body;
+						if (result.ok !== true || body === null || typeof body !== "object" || body.job === null || typeof body.job !== "object") return;
+						setJobs(function (previous) {
+							return patchMap(previous, repo, jobView(body.job, previous[repo]));
+						});
+					}, function () {
+						/* the poll that is still in flight keeps governing the row */
+					});
+				} catch (error) {
+					/* same: the row keeps its own phase until the poll answers */
+				}
+			};
+
+			var toggleTarget = function (target) {
+				var next = targets.indexOf(target) < 0
+					? normalizeTargets(targets.concat([target]))
+					: targets.filter(function (value) { return value !== target; });
+				if (next.length === 0) {
+					setHint(t("videoSkills.targetHint"));
+					return;
+				}
+				setHint("");
+				setTargets(next);
+				writeTargets(next);
+			};
+
+			/** Two-step uninstall: one armed row at a time, then one serial /uninstall per owned target. */
+			var uninstall = function (entry, hit) {
+				if (hit === null || hit.owned.length === 0) return;
+				var repo = String(entry.repo === undefined ? "" : entry.repo);
+				if (confirming !== repo) {
+					setConfirming(repo);
+					return;
+				}
+				setConfirming("");
+				var step = function (index) {
+					if (index >= hit.owned.length) {
+						loadInstalled();
+						return;
+					}
+					setRowErrors(function (previous) {
+						return patchMap(previous, repo, undefined);
+					});
+					try {
+						requestJson("/uninstall", {
+							method: "POST",
+							headers: { "content-type": "application/json" },
+							body: JSON.stringify({ name: hit.name, target: hit.owned[index] })
+						}).then(function (result) {
+							if (!alive()) return;
+							var body = result.body === undefined ? null : result.body;
+							if (result.ok === true && body !== null && typeof body === "object" && body.ok === true) {
+								step(index + 1);
+								return;
+							}
+							setRowErrors(function (previous) {
+								return patchMap(previous, repo, uninstallErrorText(t, result, hit.name));
+							});
+							step(index + 1);
+						}, function (error) {
+							if (!alive()) return;
+							setRowErrors(function (previous) {
+								return patchMap(previous, repo, error !== null && error !== undefined && error.network === true ? t("videoSkills.error.network") : t("videoSkills.error.install", { message: String(error !== null && error !== undefined ? error.message : error) }));
+							});
+							step(index + 1);
+						});
+					} catch (error) {
+						setRowErrors(function (previous) {
+							return patchMap(previous, repo, t("videoSkills.error.install", { message: String(error !== null && error !== undefined ? error.message : error) }));
+						});
+						step(index + 1);
+					}
+				};
+				step(0);
+			};
+
 			var licenses = useMemo(function () {
 				var seen = {};
 				var list = [];
@@ -545,6 +1014,7 @@ window.__ModuleLoader__.load({
 				for (var index = 0; index < entries.length; index += 1) {
 					var item = entries[index];
 					if (item === null || typeof item !== "object") continue;
+					if (onlyInstalled === true && installedFor(installed, item) === null) continue;
 					if (filters.kinds.length > 0 && filters.kinds.indexOf(item.kind) < 0) continue;
 					if (typeof item.stars === "number" && item.stars < filters.minStars) continue;
 					if (filters.grade !== "" && item.grade !== filters.grade) continue;
@@ -556,7 +1026,7 @@ window.__ModuleLoader__.load({
 					output.push(item);
 				}
 				return output;
-			}, [snapshot.entries, filters]);
+			}, [snapshot.entries, filters, onlyInstalled, installed]);
 
 			var shown = filtered.slice(0, Math.min(visible, ROW_LIMIT));
 
@@ -577,67 +1047,33 @@ window.__ModuleLoader__.load({
 				setFilter({ kinds: next });
 			};
 
-			var install = function (entry) {
-				var repo = String(entry.repo);
-				var target = targetChoice[repo] === undefined ? "claude" : targetChoice[repo];
-				setPending(function (previous) {
-					var next = {};
-					for (var name in previous) {
-						if (Object.prototype.hasOwnProperty.call(previous, name)) next[name] = previous[name];
-					}
-					next[repo] = true;
-					return next;
-				});
-				setRowErrors(function (previous) {
-					var next = {};
-					for (var name in previous) {
-						if (Object.prototype.hasOwnProperty.call(previous, name)) next[name] = previous[name];
-					}
-					delete next[repo];
-					return next;
-				});
-				var payload = { repo: repo, targets: [target] };
-				if (typeof entry.path === "string" && entry.path !== "") payload.path = entry.path;
-				var finish = function (message) {
-					setPending(function (previous) {
-						var next = {};
-						for (var name in previous) {
-							if (Object.prototype.hasOwnProperty.call(previous, name) && name !== repo) next[name] = previous[name];
-						}
-						return next;
-					});
-					if (message !== "") {
-						setRowErrors(function (previous) {
-							var next = {};
-							for (var name in previous) {
-								if (Object.prototype.hasOwnProperty.call(previous, name)) next[name] = previous[name];
-							}
-							next[repo] = message;
-							return next;
-						});
-					}
-				};
-				try {
-					requestJson("/install", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }).then(function (result) {
-						var body = result.body;
-						if (result.ok === true && body !== null && body.ok === true) {
-							finish("");
-							loadInstalled();
-							return;
-						}
-						finish(installErrorText(t, result));
-					}, function (error) {
-						finish(error !== null && error !== undefined && error.network === true ? t("videoSkills.error.network") : t("videoSkills.error.install", { message: String(error !== null && error !== undefined ? error.message : error) }));
-					});
-				} catch (error) {
-					finish(t("videoSkills.error.install", { message: String(error !== null && error !== undefined ? error.message : error) }));
-				}
-			};
-
 			var header = h("div", { style: STYLE.header }, [
 				h("h2", { key: "title", style: STYLE.title }, t("videoSkills.title")),
 				h("p", { key: "subtitle", style: STYLE.subtitle }, t("videoSkills.subtitle"))
 			]);
+
+			var targetBar = h("div", { key: "targets", style: STYLE.bar }, [
+				h("span", { key: "label", style: STYLE.hint }, t("videoSkills.installTo"))
+			].concat(TARGETS.map(function (target) {
+				return h("label", { key: target, style: STYLE.check, title: target === "claude" ? "~/.claude/skills" : "~/.dsh/skills" }, [
+					h("input", {
+						type: "checkbox",
+						value: target,
+						style: STYLE.checkInput,
+						checked: targets.indexOf(target) >= 0,
+						onChange: function () { try { toggleTarget(target); } catch (error) { } }
+					}),
+					t("videoSkills.target." + target)
+				]);
+			})).concat([
+				h("button", {
+					key: "onlyInstalled",
+					type: "button",
+					style: onlyInstalled === true ? STYLE.chipOn : STYLE.chip,
+					onClick: function () { try { setOnlyInstalled(onlyInstalled !== true); setVisible(PAGE_STEP); } catch (error) { } }
+				}, t("videoSkills.filter.installedOnly")),
+				hint !== "" ? h("span", { key: "hint", style: STYLE.targetHint, role: "alert" }, hint) : null
+			]));
 
 			var kindChips = h("div", { key: "kinds", style: STYLE.bar }, [
 				h("span", { key: "label", style: STYLE.hint }, t("videoSkills.filter.kind")),
@@ -727,61 +1163,68 @@ window.__ModuleLoader__.load({
 			var rows = shown.map(function (entry, index) {
 				var repo = String(entry.repo === undefined ? "" : entry.repo);
 				var descText = String(entry.description === undefined ? "" : entry.description);
-				var targets = installed[repo];
-				var isInstalled = Array.isArray(targets) && targets.length > 0;
-				var isPending = pending[repo] === true;
-				var chosen = targetChoice[repo] === undefined ? "claude" : targetChoice[repo];
+				var hit = installedFor(installed, entry);
+				var job = jobs[repo];
+				var running = isRunning(job);
+				var hasPath = typeof entry.path === "string" && entry.path !== "";
+				var line = "";
+				var failure = "";
+				if (job !== undefined) {
+					if (job.phase === "error") failure = jobErrorText(t, job);
+					else line = phaseText(t, job);
+				}
+				if (rowErrors[repo] !== undefined) failure = String(rowErrors[repo]);
 				var metaBits = [
 					h("span", { key: "stars", style: STYLE.badge }, t("videoSkills.stars", { n: Number(entry.stars) || 0 })),
 					h("span", { key: "grade", style: entry.grade === "caution" ? STYLE.badgeStale : STYLE.badge }, t("videoSkills.grade." + String(entry.grade)))
 				];
+				if (hit !== null) {
+					metaBits.push(h("span", { key: "installed", style: STYLE.badgeOn }, t("videoSkills.installedBadge")));
+					if (hit.external === true) metaBits.push(h("span", { key: "external", style: STYLE.badgeStale }, t("videoSkills.external")));
+					TARGETS.forEach(function (target) {
+						if (hit.targets.indexOf(target) < 0) return;
+						metaBits.push(h("span", { key: "tick-" + target, style: STYLE.tick }, t("videoSkills.target." + target) + " ✓"));
+					});
+				}
 				var detail = repo;
 				if (typeof entry.kind === "string" && entry.kind !== "") detail += " · " + t("videoSkills.kind." + entry.kind);
 				if (typeof entry.license === "string" && entry.license !== "") detail += " · " + entry.license;
-				if (isInstalled) metaBits.push(h("span", { key: "installed", style: STYLE.badgeOn }, t("videoSkills.installed")));
+
+				var actions = [
+					running === true ? h("button", {
+						key: "cancel",
+						type: "button",
+						style: STYLE.button,
+						disabled: job.cancelling === true,
+						onClick: function () { try { cancelJob(repo); } catch (error) { } }
+					}, t("videoSkills.cancel")) : null,
+					h("button", {
+						key: "install",
+						type: "button",
+						style: STYLE.primary,
+						disabled: running === true,
+						onClick: function () { try { install(entry); } catch (error) { } }
+					}, running === true ? t("videoSkills.installing") : t("videoSkills.install")),
+					hit !== null && hit.external !== true && hit.owned.length > 0 ? h("button", {
+						key: "uninstall",
+						type: "button",
+						style: confirming === repo ? STYLE.buttonDanger : STYLE.button,
+						onClick: function () { try { uninstall(entry, hit); } catch (error) { } }
+					}, confirming === repo ? t("videoSkills.uninstallConfirm") : t("videoSkills.uninstall")) : null
+				];
 
 				return h("div", { key: repo + "#" + String(index), style: STYLE.item }, [
 					h("div", { key: "body", style: STYLE.body }, [
 						h("div", { key: "head", style: STYLE.head }, [
-							h("span", { key: "repo", style: STYLE.repo, title: detail }, repo),
+							h("a", { key: "repo", style: STYLE.repoLink, href: repoUrl(repo), target: "_blank", rel: "noreferrer", title: t("videoSkills.openRepo") }, repo),
+							hasPath ? h("a", { key: "path", style: STYLE.pathLink, href: pathUrl(repo, entry.path), target: "_blank", rel: "noreferrer", title: t("videoSkills.openPath") }, t("videoSkills.openPath")) : null,
 							h("span", { key: "meta", style: STYLE.meta }, metaBits)
 						]),
-						h("p", { key: "desc", style: STYLE.desc, title: descText }, descText)
+						h("p", { key: "desc", style: STYLE.desc, title: descText }, descText),
+						line !== "" ? h("p", { key: "phase", style: STYLE.phase }, line) : null,
+						failure !== "" ? h("p", { key: "error", style: STYLE.errorRow, role: "alert" }, failure) : null
 					]),
-					h("div", { key: "actions", style: STYLE.actions }, [
-						h("div", { key: "targets", style: STYLE.row }, TARGETS.map(function (target) {
-							return h("label", { key: target, style: STYLE.radio, title: target === "claude" ? "~/.claude/skills" : "~/.dsh/skills" }, [
-								h("input", {
-									type: "radio",
-									name: "target-" + repo,
-									value: target,
-									style: STYLE.radioInput,
-									checked: chosen === target,
-									onChange: function () {
-										try {
-											setTargetChoice(function (previous) {
-												var next = {};
-												for (var name in previous) {
-													if (Object.prototype.hasOwnProperty.call(previous, name)) next[name] = previous[name];
-												}
-												next[repo] = target;
-												return next;
-											});
-										} catch (error) { }
-									}
-								}),
-								t("videoSkills.target." + target)
-							]);
-						})),
-						h("button", {
-							key: "install",
-							type: "button",
-							style: STYLE.primary,
-							disabled: isPending,
-							onClick: function () { try { install(entry); } catch (error) { } }
-						}, isPending ? t("videoSkills.installing") : t("videoSkills.install")),
-						rowErrors[repo] !== undefined ? h("div", { key: "error", style: STYLE.errorRow, role: "alert", title: String(rowErrors[repo]) }, String(rowErrors[repo])) : null
-					])
+					h("div", { key: "actions", style: STYLE.actions }, actions)
 				]);
 			});
 
@@ -794,13 +1237,13 @@ window.__ModuleLoader__.load({
 				more = h("button", {
 					type: "button",
 					style: STYLE.button,
-					onClick: function () { try { setVisible(function (previous) { return Math.min(previous + PAGE_STEP, ROW_LIMIT); }); } catch (error) { } }
+					onClick: function () { try { setVisible(Math.min(visible + PAGE_STEP, ROW_LIMIT)); } catch (error) { } }
 				}, t("videoSkills.more"));
 			} else if (filtered.length > 0) {
 				more = h("span", { style: STYLE.hint }, t("videoSkills.noMore"));
 			}
 
-			var children = [header, kindChips, controls, statusLine];
+			var children = [header, targetBar, kindChips, controls, statusLine];
 			if (list !== null) children.push(list);
 			if (more !== null) children.push(h("div", { key: "more", style: STYLE.bar }, more));
 			return h("div", { style: STYLE.page }, children);

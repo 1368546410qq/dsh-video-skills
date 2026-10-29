@@ -42,5 +42,20 @@
   "videoSkills.kind.craft": "Craft",
   "videoSkills.kind.music": "Music",
   "videoSkills.grade.safe": "Safe",
-  "videoSkills.grade.caution": "Caution"
+  "videoSkills.grade.caution": "Caution",
+  "videoSkills.installTo": "Install to",
+  "videoSkills.filter.installedOnly": "Installed only",
+  "videoSkills.phase.download": "Downloading {mb} MB",
+  "videoSkills.phase.unpack": "Unpacking",
+  "videoSkills.phase.copy": "Copying {n} files",
+  "videoSkills.cancel": "Cancel",
+  "videoSkills.cancelled": "Cancelled",
+  "videoSkills.uninstall": "Uninstall",
+  "videoSkills.uninstallConfirm": "Uninstall?",
+  "videoSkills.installedBadge": "Installed",
+  "videoSkills.external": "External",
+  "videoSkills.targetHint": "Keep at least one install target selected",
+  "videoSkills.openRepo": "Open the repository on GitHub",
+  "videoSkills.openPath": "Path",
+  "videoSkills.error.ownership": "That directory was not installed by this plugin: {name}"
 }

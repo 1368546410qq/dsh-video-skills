@@ -151,6 +151,25 @@ export const INSTALL_OUTPUT_SCHEMA = {
   },
 };
 
+/** Output schema of video_skill_uninstall; failures carry an error code instead. */
+export const UNINSTALL_OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    ok: { type: 'boolean' },
+    error: { type: 'string' },
+    removed: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        name: { type: 'string' },
+        target: { type: 'string' },
+        dir: { type: 'string' },
+      },
+    },
+  },
+};
+
 /** Parameters of video_skill_search. */
 export const SEARCH_PARAMETERS = {
   query: { type: 'string', description: 'Free-text match over repository name and description.' },
@@ -172,7 +191,23 @@ export const INSTALL_PARAMETERS = {
   targets: {
     type: 'array',
     items: { type: 'string', enum: ['claude', 'dsh'] },
-    description: 'Skill roots to install into: claude for ~/.claude/skills, dsh for ~/.dsh/skills. Default claude.',
+    default: ['dsh'],
+    description: 'Skill roots to install into: claude for ~/.claude/skills, dsh for ~/.dsh/skills. Default dsh.',
+  },
+};
+
+/** Parameters of video_skill_uninstall. */
+export const UNINSTALL_PARAMETERS = {
+  name: {
+    type: 'string',
+    required: true,
+    description: 'Installed skill directory name, as video_skill_install reported it.',
+  },
+  target: {
+    type: 'string',
+    required: true,
+    enum: ['claude', 'dsh'],
+    description: 'Skill root to remove from: claude for ~/.claude/skills, dsh for ~/.dsh/skills.',
   },
 };
 
@@ -193,15 +228,24 @@ function renderSearch(_args, value) {
   return textBlock(lines.join('\n'));
 }
 
+/** Render one uninstall outcome for the model. */
+function renderUninstall(_args, value) {
+  if (value?.ok === true) {
+    return textBlock('removed ' + value.removed.name + ' (' + value.removed.target + ') from ' + value.removed.dir);
+  }
+  return textBlock('uninstall failed: ' + String(value?.error ?? 'unknown'));
+}
+
 /**
- * Build the two tool definitions.
+ * Build the three tool definitions.
  * @param options.defineTool - defineTool from the host package or the local mirror.
  * @param options.loadCatalog - async catalog loader.
  * @param options.filterEntries - pure entry filter.
  * @param options.installSkill - async install engine.
+ * @param options.uninstallSkill - async uninstall engine.
  */
 export function buildVideoTools(options) {
-  const { defineTool = localDefineTool, loadCatalog, filterEntries, installSkill } = options;
+  const { defineTool = localDefineTool, loadCatalog, filterEntries, installSkill, uninstallSkill } = options;
   return [
     defineTool({
       name: 'video_skill_search',
@@ -227,6 +271,15 @@ export function buildVideoTools(options) {
         render: (_args, value) => textBlock(JSON.stringify(value, null, 2)),
       },
       execute: async (args) => installSkill(args ?? {}),
+    }),
+    defineTool({
+      name: 'video_skill_uninstall',
+      description:
+        'Remove one skill this plugin installed from ~/.claude/skills or ~/.dsh/skills. A directory without the ' +
+        'plugin marker was installed by hand and is never removed.',
+      parameters: UNINSTALL_PARAMETERS,
+      output: { schema: UNINSTALL_OUTPUT_SCHEMA, render: renderUninstall },
+      execute: async (args) => uninstallSkill(args ?? {}),
     }),
   ];
 }

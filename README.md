@@ -6,14 +6,14 @@ Chinese documentation: [README.zh-CN.md](./README.zh-CN.md)
 
 ## What the plugin adds
 
-- One page seat in the DSH settings UI (`key: video-skills`, `order: 900`): a filter bar (kind chips, minimum stars, grade, license, search), a list of at most 100 rows with "load more", and a per-row install control with a `claude` / `dsh` target choice and an installed badge. Copy is bilingual — `zh-CN` default, `en-US` available — and every string lives in `locale/*.json`.
-- Two model tools: `video_skill_search` and `video_skill_install`.
+- One page seat in the DSH settings UI (`key: video-skills`, `order: 900`): an **Install to** bar with `Claude` / `DSH` checkboxes (only `DSH` is checked by default and the choice is remembered in `localStorage`), an **installed only** filter, and the filter bar (kind chips, minimum stars, grade, license, search) over a list of at most 100 rows with "load more". Each row links to its GitHub repository and to the skill path inside it, shows live progress (`downloading <n> MB` / `unpacking` / `copying <n> files`) with a cancel button, ticks every installed target, and uninstalls in two clicks. Copy is bilingual — `zh-CN` default, `en-US` available — and every string lives in `locale/*.json`.
+- Three model tools: `video_skill_search`, `video_skill_install` and `video_skill_uninstall`.
 - One HTTP prefix route, `/video-skills/api/v1`, that the page talks to. The route is served even when no tool registry is composed, and the tools are registered only when one is.
 
 ## Requirements
 
 - Node.js 20 or newer (`engines` in `package.json`).
-- A DSH profile that provides the `webServer` service — the host entry declares `inject = ['webServer']`.
+- Any DSH composition. The entry declares `inject = []` and resolves its services reactively: the tools appear whenever a `tools` service exists, and the HTTP route is mounted only when `webServer` exists, so CLI and TUI sessions still get all three tools.
 - Runtime dependency: `tar` (used to stream, list and extract the downloaded archive). Nothing else is installed at runtime.
 
 ## Installation
@@ -39,10 +39,10 @@ dsh plugin --profile <name> add dsh-video-skills
 Local development, from a checkout of this repository:
 
 ```bash
-dsh plugin --profile <name> add file:/absolute/path/to/dsh-plugin-video-skills
+dsh plugin --profile <name> add link:/absolute/path/to/dsh-plugin-video-skills
 ```
 
-then append `"dsh-video-skills"` to `dsh.profile.bundles` in the same profile `package.json`. The plugin is linked from the working tree, so later edits are picked up from there.
+`link:` installs a symlink rather than a copy, so later edits are picked up without reinstalling. Append `"dsh-video-skills"` to `dsh.profile.bundles` if it is not listed already.
 
 ## Tools
 
@@ -68,9 +68,18 @@ Returns `{ count, items }`: `count` is the number of matches before the page lim
 | `repo` (required) | string | — | `owner/name`; an `https://github.com/` prefix and a `.git` suffix are stripped. |
 | `path` | string | detected | Skill directory inside the repository. Omit to pick the shallowest `SKILL.md`. |
 | `name` | string | detected | Override the installed skill directory name. |
-| `targets` | array of `claude` \| `dsh` | `["claude"]` | Skill roots to install into; duplicates are dropped. |
+| `targets` | array of `claude` \| `dsh` | `["dsh"]` | Skill roots to install into; duplicates are dropped. |
 
-Returns the same object as `POST /install` — on success `{ ok: true, name, installed: [{ target, dir, files }], warnings: string[] }`; on failure `{ ok: false, error, message?, dir? }` with `error` one of `bad-repo`, `bad-targets`, `fetch-failed`, `no-skill-md`, `exists`.
+Returns the engine result — on success `{ ok: true, name, installed: [{ target, dir, files }], warnings: string[] }`; on failure `{ ok: false, error, message?, dir? }` with `error` one of `bad-repo`, `bad-targets`, `fetch-failed`, `no-skill-md`, `exists`. The tool runs the engine synchronously and reports no intermediate progress; the page uses `POST /install` and polls for that.
+
+### `video_skill_uninstall`
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` (required) | string | — | Skill directory name, as listed by `GET /installed`. |
+| `target` (required) | `claude` \| `dsh` | — | Skill root to remove it from. |
+
+Returns `{ ok: true, removed: { name, target, dir } }`, or `{ ok: false, error }` with `bad-name`, `bad-target`, `not-found` or `not-owned`. Only a directory carrying this plugin's `.dsh-video-skills.json` marker is removed; a skill someone copied in by hand is refused with `not-owned` and never touched.
 
 ## HTTP API
 
@@ -79,10 +88,15 @@ Base path `/video-skills/api/v1`, same origin, no authentication. Every response
 | Method | Path | Success | Failure |
 | --- | --- | --- | --- |
 | `GET` | `/catalog` | `200` catalog payload | none — an unreachable upstream yields the bundled snapshot with `stale: true` |
-| `GET` | `/installed` | `200 {"ok":true,"items":[{"name","target","dir","repo","installedAt"}]}` | none |
-| `POST` | `/install` | `200` install result | `409 {"ok":false,"error":"exists","dir"}` when the target directory exists and is not this plugin's install of the same repository; `400` with `error` `bad-repo`, `bad-targets`, `no-skill-md` or `fetch-failed` |
+| `GET` | `/installed` | `200 {"ok":true,"items":[{"name","target","dir","repo","path","installedAt","files","owned","external"}]}` | none |
+| `POST` | `/install` | `202 {"ok":true,"job"}` — the install runs in the background | `400` with `error` `bad-body`, `bad-repo` or `bad-targets`; `409 {"ok":false,"error":"busy"}` once eight jobs are running |
+| `GET` | `/install/<id>` | `200 {"ok":true,"job"}` | `404 {"ok":false,"error":"unknown-job"}` |
+| `POST` | `/install/<id>/cancel` | `200 {"ok":true,"job"}` — a settled job comes back unchanged | `404` `unknown-job` |
+| `POST` | `/uninstall` | `200 {"ok":true,"removed":{"name","target","dir"}}` | `400` `bad-body` \| `bad-name` \| `bad-target`; `404` `not-found`; `409 {"ok":false,"error":"not-owned"}` when the directory has no marker |
 | `POST` | `/refresh` | `200 {"ok":true,"generated","count","stale":false}` | `502 {"ok":false,"error":"fetch-failed","message"}` |
 | any | any other path | — | `404 {"ok":false,"error":"not-found"}` |
+
+A job is `{ id, repo, targets, phase, bytes, files, copied, name, installed, warnings, error, message, startedAt, updatedAt }` where `phase` is one of `queued`, `download`, `inspect`, `extract`, `copy`, `done`, `error`, `cancelled`. `bytes` counts the archive received so far, `copied` the files written so far. Cancelling aborts the download and removes every directory the job had already written. At most 32 jobs are retained, a finished job stays readable for ten minutes. The page polls every 500 ms.
 
 An exception inside the handler is answered as `500 {"ok":false,"error":"internal","message"}`.
 
@@ -122,7 +136,7 @@ Catalog payload:
 
 What an install does:
 
-1. Download `https://codeload.github.com/<owner>/<repo>/tar.gz/HEAD` into a fresh temporary directory. The download is aborted past 80 MiB.
+1. Download `https://codeload.github.com/<owner>/<repo>/tar.gz/HEAD` into a fresh temporary directory. The download is aborted past 512 MiB, and the refusal reports the byte count actually received — `archive exceeds the 512 MiB download budget (received <n> bytes)`.
 2. Resolve the skill directory: the explicit `path` when given, otherwise the shallowest `SKILL.md` in the archive — ties go to a directory named after the repository, then alphabetically.
 3. Copy that directory into `<root>/<name>`, skipping `.git/**`, `node_modules/**` and any file above 10 MiB. Every skip is appended to `warnings` as `skipped:<reason>:<path>`.
 4. Write `<root>/<name>/.dsh-video-skills.json` = `{ repo, path, ref: "HEAD", installedAt, files }`.
@@ -130,6 +144,10 @@ What an install does:
 The directory name comes from the `name` parameter, then the `name` field of the target `SKILL.md` frontmatter, then the directory basename, then `skill`; it is lowercased and reduced to `[a-z0-9._-]`, at most 64 characters.
 
 Conflicts: a target directory with no marker, or whose marker names a different repository, is refused with `exists`. A marker for the same repository makes the install an overwrite.
+
+Progress and cancel: the engine reports `{ phase, bytes, files, copied }` at most ten times a second; cancelling throws away the temporary tree and every directory the job already copied into. A cancelled overwrite therefore does not restore the previous version — it is a cleanup, not a rollback.
+
+Uninstall: only a directory carrying this plugin's marker is removed. `GET /installed` also lists skill roots it does not own — a directory with a `SKILL.md` but no marker comes back with `owned: false, external: true`, appears as an external entry in the page, and has no uninstall button.
 
 DSH watches both skill roots, so a newly installed skill becomes available without any rescan command.
 
@@ -139,7 +157,7 @@ DSH watches both skill roots, so a newly installed skill becomes available witho
 - Nothing from the downloaded archive is executed. The tarball is listed and its entries are copied; no postinstall, no script from the repository, no build step.
 - Archive entries are validated: an entry that escapes the extraction root is a hard error, and both listing and extraction run with `strict: true`.
 - Files only: the engine writes the skill directory and the marker file and nothing else. A path-traversal entry or an unusable `path` parameter is rejected rather than repaired.
-- A directory this plugin did not create is never overwritten.
+- A directory this plugin did not create is never overwritten, and an uninstall removes a directory only when its marker proves this plugin installed it.
 - The page makes same-origin requests to `/video-skills/api/v1` only; preview images are loaded from `raw.githubusercontent.com`. There is no write path into the catalog.
 
 ## Catalog, cache, and offline snapshot
@@ -156,8 +174,9 @@ DSH watches both skill roots, so a newly installed skill becomes available witho
 ```
 src/host/index.js        Cordis plugin entry: the HTTP prefix route and tool registration
 src/host/catalog.js      fetch, 24 h cache, snapshot fallback, filtering
-src/host/install.js      archive download, skill-directory detection, copy engine
-src/host/tool-schema.js  the two tool definitions
+src/host/install.js      archive download, skill-directory detection, copy engine, uninstall
+src/host/jobs.js         in-memory install job table: progress, cancel, retention
+src/host/tool-schema.js  the three tool definitions
 client/client.js         settings page (classic script, no build step)
 locale/zh-CN.json        Chinese copy
 locale/en-US.json        English copy
@@ -166,6 +185,7 @@ data/NOTICE.md           data provenance note
 cordis.patch.yml         bundle patch
 test/                    node --test suites (not published)
 CONTRACT.md              implementation contract (not published)
+CONTRACT-V2.md           v2 increments: jobs, cancel, uninstall (not published)
 ```
 
 ## License and data provenance

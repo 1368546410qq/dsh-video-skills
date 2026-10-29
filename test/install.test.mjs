@@ -7,9 +7,14 @@ import test from 'node:test';
 import { create as createArchive } from 'tar';
 
 import {
+  archiveBudgetMessage,
+  createProgressReporter,
+  DEFAULT_TARGETS,
   installSkill,
   isSafeRelativePath,
+  listInstalled,
   MARKER_FILE,
+  MAX_ARCHIVE_BYTES,
   MAX_FILE_BYTES,
   normalizeArchivePath,
   normalizeRepo,
@@ -22,7 +27,10 @@ import {
   skillRoot,
   skipReason,
   stripArchiveRoot,
+  uninstallSkill,
 } from '../src/host/install.js';
+import { API_BASE, createHandler } from '../src/host/index.js';
+import { createJobStore, JOB_TTL_MS, MAX_RUNNING_JOBS } from '../src/host/jobs.js';
 
 test('pickSkillDir selects the shallowest SKILL.md', () => {
   const files = [
@@ -99,8 +107,9 @@ test('normalizeRepo accepts repository forms and refuses anything else', () => {
   assert.equal(normalizeRepo(undefined), null);
 });
 
-test('normalizeTargets defaults to claude and de-duplicates', () => {
-  assert.deepEqual(normalizeTargets(undefined), ['claude']);
+test('normalizeTargets defaults to DSH, the v2 default target, and de-duplicates', () => {
+  assert.deepEqual(normalizeTargets(undefined), DEFAULT_TARGETS);
+  assert.deepEqual(normalizeTargets(undefined), ['dsh']);
   assert.deepEqual(normalizeTargets(['dsh', 'claude', 'dsh']), ['dsh', 'claude']);
   assert.equal(normalizeTargets([]), null);
   assert.equal(normalizeTargets(['claude', 'nope']), null);
@@ -141,6 +150,21 @@ async function buildArchive(workspace) {
   const archive = path.join(workspace, 'HEAD.tar.gz');
   await createArchive({ gzip: true, file: archive, cwd: workspace }, ['owner-demo-sha']);
   return archive;
+}
+
+/** Whether one path exists. */
+async function exists(candidate) {
+  try {
+    await fs.access(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Let the microtask queue drain, so a started job can settle. */
+function tick() {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 test('installSkill copies the skill, skips .git/node_modules and writes the marker', async () => {
@@ -210,4 +234,420 @@ test('installSkill copies the skill, skips .git/node_modules and writes the mark
   assert.deepEqual(clean.warnings, []);
 
   await fs.rm(workspace, { recursive: true, force: true });
+});
+
+test('the download budget is 512 MiB and its refusal names the received bytes', () => {
+  assert.equal(MAX_ARCHIVE_BYTES, 512 * 1024 * 1024);
+  assert.equal(
+    archiveBudgetMessage(536870913),
+    'archive exceeds the 512 MiB download budget (received 536870913 bytes)',
+  );
+  assert.equal(
+    archiveBudgetMessage(MAX_ARCHIVE_BYTES + 1),
+    'archive exceeds the 512 MiB download budget (received 536870913 bytes)',
+  );
+});
+
+test('createProgressReporter caps progress at ten calls a second and swallows callback errors', () => {
+  const seen = [];
+  const report = createProgressReporter((progress) => seen.push(progress));
+  for (let index = 0; index < 50; index += 1) report({ phase: 'download', bytes: index });
+  assert.equal(seen.length, 1);
+  report({ phase: 'inspect' });
+  report({ phase: 'extract' });
+  assert.deepEqual(seen.map((progress) => progress.phase), ['download', 'inspect', 'extract']);
+  assert.doesNotThrow(() => createProgressReporter(() => {
+    throw new Error('boom');
+  })({ phase: 'download' }));
+  assert.doesNotThrow(() => createProgressReporter(null)({ phase: 'download' }));
+});
+
+test('installSkill streams progress and cancels at download and at copy', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'vs-cancel-'));
+  const archive = await buildArchive(workspace);
+
+  const phases = [];
+  const env = {
+    DSH_VIDEO_SKILLS_CLAUDE_ROOT: path.join(workspace, 'claude-root'),
+    DSH_VIDEO_SKILLS_DSH_ROOT: path.join(workspace, 'dsh-root'),
+  };
+  const installed = await installSkill({
+    repo: 'owner/demo',
+    targets: ['claude'],
+    env,
+    fetchImpl: stubFetch(archive),
+    onProgress: (progress) => phases.push(progress.phase),
+  });
+  assert.equal(installed.ok, true);
+  assert.deepEqual([...new Set(phases)], ['download', 'inspect', 'extract', 'copy']);
+  assert.ok(phases.length <= 10, 'progress fired ' + phases.length + ' times');
+
+  const preAborted = new AbortController();
+  preAborted.abort();
+  assert.deepEqual(
+    await installSkill({ repo: 'owner/demo', targets: ['claude'], env, fetchImpl: stubFetch(archive), signal: preAborted.signal }),
+    { ok: false, error: 'cancelled' },
+  );
+
+  const downloadAbort = new AbortController();
+  const downloadEnv = { DSH_VIDEO_SKILLS_CLAUDE_ROOT: path.join(workspace, 'claude-download') };
+  const chunkedFetch = async () => {
+    const bytes = await fs.readFile(archive);
+    const half = Math.floor(bytes.length / 2);
+    return { ok: true, status: 200, body: Readable.toWeb(Readable.from([bytes.subarray(0, half), bytes.subarray(half)])) };
+  };
+  assert.deepEqual(
+    await installSkill({
+      repo: 'owner/demo',
+      targets: ['claude'],
+      env: downloadEnv,
+      fetchImpl: chunkedFetch,
+      signal: downloadAbort.signal,
+      onProgress: (progress) => {
+        if (progress.phase === 'download') downloadAbort.abort();
+      },
+    }),
+    { ok: false, error: 'cancelled' },
+  );
+  assert.equal(await exists(downloadEnv.DSH_VIDEO_SKILLS_CLAUDE_ROOT), false);
+
+  const copyAbort = new AbortController();
+  const copyEnv = { DSH_VIDEO_SKILLS_CLAUDE_ROOT: path.join(workspace, 'claude-copy') };
+  assert.deepEqual(
+    await installSkill({
+      repo: 'owner/demo',
+      targets: ['claude'],
+      env: copyEnv,
+      fetchImpl: stubFetch(archive),
+      signal: copyAbort.signal,
+      onProgress: (progress) => {
+        if (progress.phase === 'copy') copyAbort.abort();
+      },
+    }),
+    { ok: false, error: 'cancelled' },
+  );
+  assert.equal(await exists(path.join(copyEnv.DSH_VIDEO_SKILLS_CLAUDE_ROOT, 'demo-skill')), false);
+
+  await fs.rm(workspace, { recursive: true, force: true });
+});
+
+test('uninstallSkill removes only directories carrying the ownership marker', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'vs-uninstall-'));
+  const root = path.join(workspace, 'claude-root');
+  await fs.mkdir(path.join(root, 'demo-skill'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, 'demo-skill', MARKER_FILE),
+    JSON.stringify({ repo: 'owner/demo', installedAt: '2026-01-01T00:00:00.000Z', files: 1 }),
+  );
+  await fs.mkdir(path.join(root, 'handmade'), { recursive: true });
+  await fs.writeFile(path.join(root, 'handmade', 'SKILL.md'), '# handmade');
+  await fs.mkdir(path.join(root, 'stray-dir'), { recursive: true });
+  const env = { DSH_VIDEO_SKILLS_CLAUDE_ROOT: root };
+
+  assert.deepEqual(await uninstallSkill({ name: 'demo-skill', target: 'claude', env }), {
+    ok: true,
+    removed: { name: 'demo-skill', target: 'claude', dir: path.join(root, 'demo-skill') },
+  });
+  assert.equal(await exists(path.join(root, 'demo-skill')), false);
+
+  assert.deepEqual(await uninstallSkill({ name: 'handmade', target: 'claude', env }), { ok: false, error: 'not-owned' });
+  assert.equal(await exists(path.join(root, 'handmade', 'SKILL.md')), true);
+  assert.deepEqual(await uninstallSkill({ name: 'stray-dir', target: 'claude', env }), { ok: false, error: 'not-owned' });
+  assert.deepEqual(await uninstallSkill({ name: 'missing-skill', target: 'claude', env }), { ok: false, error: 'not-found' });
+  assert.deepEqual(await uninstallSkill({ name: '../escape', target: 'claude', env }), { ok: false, error: 'bad-name' });
+  assert.deepEqual(await uninstallSkill({ name: '', target: 'claude', env }), { ok: false, error: 'bad-name' });
+  assert.deepEqual(await uninstallSkill({ name: 'handmade', target: 'wsl', env }), { ok: false, error: 'bad-target' });
+
+  await fs.rm(workspace, { recursive: true, force: true });
+});
+
+test('listInstalled reports owned and external skills and tolerates an old marker', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'vs-list-'));
+  const dshRoot = path.join(workspace, 'dsh-root');
+  await fs.mkdir(path.join(dshRoot, 'demo-skill'), { recursive: true });
+  await fs.writeFile(path.join(dshRoot, 'demo-skill', 'SKILL.md'), '# demo');
+  await fs.writeFile(path.join(dshRoot, 'demo-skill', 'extra.md'), 'more');
+  await fs.writeFile(
+    path.join(dshRoot, 'demo-skill', MARKER_FILE),
+    JSON.stringify({ repo: 'owner/demo', ref: 'HEAD', installedAt: '2026-01-01T00:00:00.000Z' }),
+  );
+  await fs.mkdir(path.join(dshRoot, 'handmade'), { recursive: true });
+  await fs.writeFile(path.join(dshRoot, 'handmade', 'SKILL.md'), '# handmade');
+  await fs.mkdir(path.join(dshRoot, 'empty-dir'), { recursive: true });
+  await fs.writeFile(path.join(dshRoot, 'stray.txt'), 'not a skill');
+  const env = {
+    DSH_VIDEO_SKILLS_CLAUDE_ROOT: path.join(workspace, 'claude-root'),
+    DSH_VIDEO_SKILLS_DSH_ROOT: dshRoot,
+  };
+
+  const items = await listInstalled({ env });
+  assert.equal(items.length, 2);
+
+  const owned = items.find((item) => item.name === 'demo-skill');
+  assert.deepEqual(owned, {
+    name: 'demo-skill',
+    target: 'dsh',
+    dir: path.join(dshRoot, 'demo-skill'),
+    repo: 'owner/demo',
+    path: null,
+    installedAt: '2026-01-01T00:00:00.000Z',
+    files: 2,
+    owned: true,
+    external: false,
+  });
+
+  const external = items.find((item) => item.name === 'handmade');
+  assert.deepEqual(external, {
+    name: 'handmade',
+    target: 'dsh',
+    dir: path.join(dshRoot, 'handmade'),
+    repo: null,
+    path: null,
+    installedAt: null,
+    files: 1,
+    owned: false,
+    external: true,
+  });
+
+  await fs.rm(workspace, { recursive: true, force: true });
+});
+
+test('a job runs to done and stays readable until the ten minute window closes', async () => {
+  let now = 0;
+  const store = createJobStore({ now: () => now });
+  const created = store.create({
+    repo: 'owner/demo',
+    targets: ['dsh'],
+    run: async () => ({ ok: true, name: 'demo', installed: [{ target: 'dsh', dir: '/skills/demo', files: 2 }], warnings: [] }),
+  });
+  assert.equal(created.ok, true);
+  const job = created.job;
+  assert.match(job.id, /^job-[0-9a-f]{8}$/);
+  assert.equal(job.phase, 'queued');
+  assert.equal(job.repo, 'owner/demo');
+  assert.deepEqual(job.targets, ['dsh']);
+  assert.deepEqual(job.installed, []);
+  assert.equal(job.error, null);
+  assert.equal(job.message, null);
+  assert.equal(job.startedAt, job.updatedAt);
+  assert.equal(store.runningCount(), 1);
+  assert.equal(store.get('job-00000000'), null);
+
+  await tick();
+  const done = store.get(job.id);
+  assert.equal(done.phase, 'done');
+  assert.equal(done.name, 'demo');
+  assert.deepEqual(done.installed, [{ target: 'dsh', dir: '/skills/demo', files: 2 }]);
+  assert.equal(done.error, null);
+  assert.equal(store.runningCount(), 0);
+
+  now = JOB_TTL_MS - 1;
+  assert.equal(store.get(job.id).phase, 'done');
+  now = JOB_TTL_MS;
+  assert.equal(store.get(job.id), null);
+  assert.deepEqual(store.list(), []);
+});
+
+test('the job table keeps 32 jobs, answers busy past eight running, and cancels', async () => {
+  const store = createJobStore();
+  const running = store.create({
+    repo: 'owner/demo',
+    targets: ['dsh'],
+    run: ({ signal }) =>
+      new Promise((resolve) => {
+        signal.addEventListener('abort', () => resolve({ ok: false, error: 'cancelled' }), { once: true });
+      }),
+  });
+  assert.equal(store.cancel(running.job.id).phase, 'queued');
+  await tick();
+  assert.equal(store.get(running.job.id).phase, 'cancelled');
+  assert.equal(store.cancel(running.job.id).phase, 'cancelled');
+  assert.equal(store.cancel('job-00000000'), null);
+
+  const capped = createJobStore();
+  for (let index = 0; index < MAX_RUNNING_JOBS; index += 1) {
+    const started = capped.create({ repo: 'owner/demo', targets: ['dsh'], run: () => new Promise(() => {}) });
+    assert.equal(started.ok, true);
+  }
+  assert.deepEqual(capped.create({ repo: 'owner/demo', targets: ['dsh'], run: () => new Promise(() => {}) }), {
+    ok: false,
+    error: 'busy',
+  });
+
+  const bounded = createJobStore({ maxRunning: 64 });
+  const ids = [];
+  for (let index = 0; index < 34; index += 1) {
+    ids.push(bounded.create({
+      repo: 'owner/demo',
+      targets: ['dsh'],
+      run: async () => ({ ok: true, name: 'demo', installed: [], warnings: [] }),
+    }).job.id);
+  }
+  assert.equal(bounded.list().length, 32);
+  assert.equal(bounded.get(ids[0]), null);
+  assert.equal(bounded.get(ids[33]).phase, 'queued');
+  await tick();
+  assert.equal(bounded.get(ids[33]).phase, 'done');
+});
+
+/** One fake request carrying an optional JSON body. */
+function jsonRequest(method, route, body) {
+  const req = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body), 'utf8')]);
+  req.method = method;
+  req.url = API_BASE + route;
+  return req;
+}
+
+/** One fake response that captures the status, the headers and the parsed body. */
+function captureResponse() {
+  return {
+    statusCode: 0,
+    headers: {},
+    headersSent: false,
+    body: null,
+    setHeader(header, value) {
+      this.headers[header] = value;
+    },
+    end(text) {
+      this.body = JSON.parse(text);
+      this.headersSent = true;
+    },
+  };
+}
+
+/** Drive the route handler directly, without a socket. */
+async function callRoute(handler, method, route, body) {
+  const res = captureResponse();
+  await handler(jsonRequest(method, route, body), res);
+  return { status: res.statusCode, body: res.body, headers: res.headers };
+}
+
+test('POST /install answers 202 with a job that polls to done and GET /installed keeps the v2 shape', async () => {
+  const handler = createHandler({
+    store: createJobStore(),
+    install: async ({ targets }) => ({
+      ok: true,
+      name: 'demo',
+      installed: targets.map((target) => ({ target, dir: '/skills/demo', files: 2 })),
+      warnings: [],
+    }),
+    listInstalled: async () => [
+      {
+        name: 'demo',
+        target: 'dsh',
+        dir: '/skills/demo',
+        repo: 'owner/demo',
+        path: null,
+        installedAt: '2026-01-01T00:00:00.000Z',
+        files: 2,
+        owned: true,
+        external: false,
+      },
+    ],
+  });
+
+  const accepted = await callRoute(handler, 'POST', '/install', { repo: 'owner/demo' });
+  assert.equal(accepted.status, 202);
+  assert.equal(accepted.headers['content-type'], 'application/json; charset=utf-8');
+  assert.equal(accepted.headers['cache-control'], 'no-store');
+  assert.equal(accepted.body.ok, true);
+  assert.match(accepted.body.job.id, /^job-[0-9a-f]{8}$/);
+  assert.deepEqual(accepted.body.job.targets, ['dsh']);
+  assert.equal(accepted.body.job.error, null);
+  const jobId = accepted.body.job.id;
+
+  await tick();
+  const polled = await callRoute(handler, 'GET', '/install/' + jobId);
+  assert.equal(polled.status, 200);
+  assert.equal(polled.body.job.phase, 'done');
+  assert.deepEqual(polled.body.job.installed, [{ target: 'dsh', dir: '/skills/demo', files: 2 }]);
+
+  const settled = await callRoute(handler, 'POST', '/install/' + jobId + '/cancel');
+  assert.equal(settled.status, 200);
+  assert.equal(settled.body.job.id, jobId);
+  assert.equal(settled.body.job.phase, 'done');
+
+  const unknown = await callRoute(handler, 'GET', '/install/job-00000000');
+  assert.equal(unknown.status, 404);
+  assert.deepEqual(unknown.body, { ok: false, error: 'unknown-job' });
+  const unknownCancel = await callRoute(handler, 'POST', '/install/job-00000000/cancel');
+  assert.equal(unknownCancel.status, 404);
+  assert.deepEqual(unknownCancel.body, { ok: false, error: 'unknown-job' });
+
+  const installed = await callRoute(handler, 'GET', '/installed');
+  assert.equal(installed.status, 200);
+  assert.equal(installed.body.items.length, 1);
+  assert.deepEqual(installed.body.items[0], {
+    name: 'demo',
+    target: 'dsh',
+    dir: '/skills/demo',
+    repo: 'owner/demo',
+    path: null,
+    installedAt: '2026-01-01T00:00:00.000Z',
+    files: 2,
+    owned: true,
+    external: false,
+  });
+});
+
+test('POST /install answers 400 for a bad body, repo or target list', async () => {
+  const handler = createHandler({ store: createJobStore(), install: async () => ({ ok: true, name: 'demo', installed: [], warnings: [] }) });
+
+  const noBody = await callRoute(handler, 'POST', '/install');
+  assert.equal(noBody.status, 400);
+  assert.deepEqual(noBody.body, { ok: false, error: 'bad-body' });
+
+  const badRepo = await callRoute(handler, 'POST', '/install', { repo: 'not-a-repo' });
+  assert.equal(badRepo.status, 400);
+  assert.deepEqual(badRepo.body, { ok: false, error: 'bad-repo' });
+
+  const badTargets = await callRoute(handler, 'POST', '/install', { repo: 'owner/demo', targets: ['wsl'] });
+  assert.equal(badTargets.status, 400);
+  assert.deepEqual(badTargets.body, { ok: false, error: 'bad-targets' });
+
+  const unknownRoute = await callRoute(handler, 'GET', '/nope');
+  assert.equal(unknownRoute.status, 404);
+  assert.deepEqual(unknownRoute.body, { ok: false, error: 'not-found' });
+});
+
+test('POST /install answers 409 busy once eight jobs are running', async () => {
+  const handler = createHandler({ store: createJobStore(), install: () => new Promise(() => {}) });
+  for (let index = 0; index < MAX_RUNNING_JOBS; index += 1) {
+    const started = await callRoute(handler, 'POST', '/install', { repo: 'owner/demo' });
+    assert.equal(started.status, 202);
+  }
+  const busy = await callRoute(handler, 'POST', '/install', { repo: 'owner/demo' });
+  assert.equal(busy.status, 409);
+  assert.deepEqual(busy.body, { ok: false, error: 'busy' });
+});
+
+test('POST /uninstall maps owned, unowned and missing skills onto 200/409/404', async () => {
+  const handler = createHandler({
+    uninstall: async ({ name, target }) => {
+      if (name === 'owned') return { ok: true, removed: { name, target, dir: '/skills/owned' } };
+      if (name === 'handmade') return { ok: false, error: 'not-owned' };
+      if (name === 'gone') return { ok: false, error: 'not-found' };
+      return { ok: false, error: 'bad-name' };
+    },
+  });
+
+  const removed = await callRoute(handler, 'POST', '/uninstall', { name: 'owned', target: 'dsh' });
+  assert.equal(removed.status, 200);
+  assert.deepEqual(removed.body, { ok: true, removed: { name: 'owned', target: 'dsh', dir: '/skills/owned' } });
+
+  const unowned = await callRoute(handler, 'POST', '/uninstall', { name: 'handmade', target: 'dsh' });
+  assert.equal(unowned.status, 409);
+  assert.deepEqual(unowned.body, { ok: false, error: 'not-owned' });
+
+  const missing = await callRoute(handler, 'POST', '/uninstall', { name: 'gone', target: 'dsh' });
+  assert.equal(missing.status, 404);
+  assert.deepEqual(missing.body, { ok: false, error: 'not-found' });
+
+  const invalid = await callRoute(handler, 'POST', '/uninstall', { name: '../escape', target: 'dsh' });
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(invalid.body, { ok: false, error: 'bad-name' });
+
+  const noBody = await callRoute(handler, 'POST', '/uninstall');
+  assert.equal(noBody.status, 400);
+  assert.deepEqual(noBody.body, { ok: false, error: 'bad-body' });
 });
