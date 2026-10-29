@@ -3,6 +3,21 @@
   "version": "0.1.0",
   "description": "Browse the awesome-claude-video-skills catalog inside DSH and install a skill with one click.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1368546410qq/dsh-video-skills.git"
+  },
+  "homepage": "https://github.com/1368546410qq/dsh-video-skills#readme",
+  "bugs": {
+    "url": "https://github.com/1368546410qq/dsh-video-skills/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "skills",
+    "video"
+  ],
   "type": "module",
   "main": "src/host/index.js",
   "exports": {
