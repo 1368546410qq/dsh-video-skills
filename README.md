@@ -46,6 +46,8 @@ then append `"dsh-video-skills"` to `dsh.profile.bundles` in the same profile `p
 
 ## Tools
 
+Both tools work in any composition — CLI, TUI, or Web. Only the browse-and-install page needs the Web UI; without a web server the plugin simply registers the tools and mounts no HTTP route.
+
 ### `video_skill_search`
 
 | Parameter | Type | Default | Description |

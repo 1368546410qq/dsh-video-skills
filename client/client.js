@@ -82,8 +82,8 @@ window.__ModuleLoader__.load({
 			"videoSkills.installing": "安装中…",
 			"videoSkills.installed": "已安装",
 			"videoSkills.target.label": "安装到",
-			"videoSkills.target.claude": "Claude（~/.claude/skills）",
-			"videoSkills.target.dsh": "DSH（~/.dsh/skills）",
+			"videoSkills.target.claude": "Claude",
+			"videoSkills.target.dsh": "DSH",
 			"videoSkills.files": "{n} 个文件",
 			"videoSkills.error.load": "目录加载失败：{message}",
 			"videoSkills.error.refresh": "刷新失败：{message}",
@@ -130,8 +130,8 @@ window.__ModuleLoader__.load({
 			"videoSkills.installing": "Installing…",
 			"videoSkills.installed": "Installed",
 			"videoSkills.target.label": "Install to",
-			"videoSkills.target.claude": "Claude (~/.claude/skills)",
-			"videoSkills.target.dsh": "DSH (~/.dsh/skills)",
+			"videoSkills.target.claude": "Claude",
+			"videoSkills.target.dsh": "DSH",
 			"videoSkills.files": "{n} files",
 			"videoSkills.error.load": "Catalog failed to load: {message}",
 			"videoSkills.error.refresh": "Refresh failed: {message}",
@@ -152,33 +152,34 @@ window.__ModuleLoader__.load({
 			"videoSkills.grade.caution": "Caution"
 		};
 
-		var STYLE = {
-			page: { display: "flex", flexDirection: "column", gap: "16px", padding: "20px", font: "14px/1.5 system-ui, -apple-system, Segoe UI, sans-serif", color: "var(--dsh-text, #e6e6e6)" },
-			header: { display: "flex", flexDirection: "column", gap: "4px" },
-			title: { margin: 0, fontSize: "18px", fontWeight: 600 },
-			subtitle: { margin: 0, fontSize: "12px", opacity: 0.7 },
-			bar: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" },
-			row: { display: "flex", alignItems: "center", gap: "8px" },
-			chip: { padding: "3px 10px", borderRadius: "999px", border: "1px solid rgba(127,127,127,0.45)", background: "transparent", color: "inherit", cursor: "pointer", fontSize: "12px" },
-			chipOn: { padding: "3px 10px", borderRadius: "999px", border: "1px solid var(--dsh-accent, #4f8cff)", background: "var(--dsh-accent, #4f8cff)", color: "#fff", cursor: "pointer", fontSize: "12px" },
-			input: { padding: "5px 8px", borderRadius: "6px", border: "1px solid rgba(127,127,127,0.45)", background: "transparent", color: "inherit", fontSize: "13px" },
-			button: { padding: "5px 12px", borderRadius: "6px", border: "1px solid rgba(127,127,127,0.45)", background: "transparent", color: "inherit", cursor: "pointer", fontSize: "13px" },
-			primary: { padding: "5px 14px", borderRadius: "6px", border: "1px solid var(--dsh-accent, #4f8cff)", background: "var(--dsh-accent, #4f8cff)", color: "#fff", cursor: "pointer", fontSize: "13px" },
+				var STYLE = {
+			page: { display: "flex", flexDirection: "column", gap: "10px", padding: "16px", font: "13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif", color: "inherit" },
+			header: { display: "flex", flexDirection: "column", gap: "2px" },
+			title: { margin: 0, fontSize: "15px", fontWeight: 600 },
+			subtitle: { margin: 0, fontSize: "12px", color: "color-mix(in srgb, currentColor 74%, transparent)" },
+			bar: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px" },
+			row: { display: "flex", alignItems: "center", gap: "6px" },
+			chip: { padding: "2px 9px", borderRadius: "999px", border: "1px solid color-mix(in srgb, currentColor 26%, transparent)", background: "transparent", color: "inherit", cursor: "pointer", fontSize: "11.5px", lineHeight: 1.6 },
+			chipOn: { padding: "2px 9px", borderRadius: "999px", border: "1px solid var(--dsh-accent, #4f8cff)", background: "var(--dsh-accent, #4f8cff)", color: "#fff", cursor: "pointer", fontSize: "11.5px", lineHeight: 1.6 },
+			input: { padding: "3px 8px", borderRadius: "6px", border: "1px solid color-mix(in srgb, currentColor 26%, transparent)", background: "transparent", color: "inherit", fontSize: "12.5px" },
+			button: { padding: "3px 10px", borderRadius: "6px", border: "1px solid color-mix(in srgb, currentColor 26%, transparent)", background: "transparent", color: "inherit", cursor: "pointer", fontSize: "12.5px" },
+			primary: { padding: "3px 12px", borderRadius: "6px", border: "1px solid var(--dsh-accent, #4f8cff)", background: "var(--dsh-accent, #4f8cff)", color: "#fff", cursor: "pointer", fontSize: "12.5px", fontWeight: 500 },
 			list: { display: "flex", flexDirection: "column", gap: "0" },
-			item: { display: "flex", gap: "12px", padding: "12px 0", borderTop: "1px solid rgba(127,127,127,0.22)" },
-			preview: { width: "112px", height: "63px", objectFit: "cover", borderRadius: "6px", flex: "0 0 auto", background: "rgba(127,127,127,0.12)" },
-			body: { display: "flex", flexDirection: "column", gap: "4px", minWidth: 0, flex: "1 1 auto" },
-			repo: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: "13px", overflowWrap: "anywhere" },
-			desc: { fontSize: "12px", opacity: 0.78, margin: 0 },
-			meta: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", fontSize: "11px", opacity: 0.75 },
-			badge: { padding: "1px 7px", borderRadius: "4px", background: "rgba(127,127,127,0.18)", fontSize: "11px" },
-			badgeOn: { padding: "1px 7px", borderRadius: "4px", background: "rgba(60,190,120,0.22)", color: "#3cbe78", fontSize: "11px" },
-			badgeStale: { padding: "1px 7px", borderRadius: "4px", background: "rgba(230,170,60,0.2)", color: "#e6aa3c", fontSize: "11px" },
-			actions: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px", flex: "0 0 auto" },
-			error: { color: "#e5534b", fontSize: "12px", margin: 0 },
-			errorRow: { color: "#e5534b", fontSize: "11px", maxWidth: "220px", textAlign: "right" },
-			hint: { fontSize: "12px", opacity: 0.7 },
-			radio: { display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", opacity: 0.85, cursor: "pointer" }
+			item: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", gap: "10px", padding: "6px 0", borderTop: "1px solid color-mix(in srgb, currentColor 13%, transparent)" },
+			body: { display: "flex", flexDirection: "column", gap: "1px", minWidth: 0 },
+			head: { display: "flex", alignItems: "baseline", gap: "0 8px", minWidth: 0 },
+			repo: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: "12.5px", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "0 1 auto", minWidth: 0 },
+			desc: { margin: 0, fontSize: "12px", color: "color-mix(in srgb, currentColor 78%, transparent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+			meta: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "5px", fontSize: "10.5px", color: "color-mix(in srgb, currentColor 70%, transparent)", flex: "0 0 auto", marginLeft: "auto" },
+			badge: { padding: "0 5px", borderRadius: "4px", border: "1px solid color-mix(in srgb, currentColor 20%, transparent)", fontSize: "10.5px", lineHeight: "15px" },
+			badgeOn: { padding: "0 5px", borderRadius: "4px", border: "1px solid rgba(60,190,120,0.55)", background: "rgba(60,190,120,0.14)", color: "#2f9e5f", fontSize: "10.5px", lineHeight: "15px" },
+			badgeStale: { padding: "0 5px", borderRadius: "4px", border: "1px solid rgba(210,150,40,0.55)", background: "rgba(210,150,40,0.14)", color: "#a97614", fontSize: "10.5px", lineHeight: "15px" },
+			actions: { display: "flex", alignItems: "center", gap: "8px", flex: "0 0 auto" },
+			error: { color: "#d4382f", fontSize: "12px", margin: 0 },
+			errorRow: { color: "#d4382f", fontSize: "10.5px", maxWidth: "190px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+			hint: { margin: 0, fontSize: "12px", color: "color-mix(in srgb, currentColor 74%, transparent)" },
+			radio: { display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "11px", cursor: "pointer", color: "color-mix(in srgb, currentColor 88%, transparent)" },
+			radioInput: { margin: 0, accentColor: "var(--dsh-accent, #4f8cff)" }
 		};
 
 		/** Substitute {name} placeholders; an unknown placeholder is left verbatim. */
@@ -725,49 +726,36 @@ window.__ModuleLoader__.load({
 
 			var rows = shown.map(function (entry, index) {
 				var repo = String(entry.repo === undefined ? "" : entry.repo);
+				var descText = String(entry.description === undefined ? "" : entry.description);
 				var targets = installed[repo];
 				var isInstalled = Array.isArray(targets) && targets.length > 0;
 				var isPending = pending[repo] === true;
 				var chosen = targetChoice[repo] === undefined ? "claude" : targetChoice[repo];
-				var preview = typeof entry.previewUrl === "string" && entry.previewUrl !== ""
-					? h("img", {
-						key: "preview",
-						style: STYLE.preview,
-						src: entry.previewUrl,
-						alt: "",
-						loading: "lazy",
-						onError: function (event) {
-							try {
-								if (event !== null && event !== undefined && event.target !== null && event.target !== undefined) event.target.style.visibility = "hidden";
-							} catch (error) {
-								/* a broken preview must never break the row */
-							}
-						}
-					})
-					: h("div", { key: "preview", style: STYLE.preview });
-
 				var metaBits = [
 					h("span", { key: "stars", style: STYLE.badge }, t("videoSkills.stars", { n: Number(entry.stars) || 0 })),
-					h("span", { key: "kind", style: STYLE.badge }, t("videoSkills.kind." + String(entry.kind))),
 					h("span", { key: "grade", style: entry.grade === "caution" ? STYLE.badgeStale : STYLE.badge }, t("videoSkills.grade." + String(entry.grade)))
 				];
-				if (typeof entry.license === "string" && entry.license !== "") metaBits.push(h("span", { key: "license", style: STYLE.badge }, entry.license));
+				var detail = repo;
+				if (typeof entry.kind === "string" && entry.kind !== "") detail += " · " + t("videoSkills.kind." + entry.kind);
+				if (typeof entry.license === "string" && entry.license !== "") detail += " · " + entry.license;
 				if (isInstalled) metaBits.push(h("span", { key: "installed", style: STYLE.badgeOn }, t("videoSkills.installed")));
 
 				return h("div", { key: repo + "#" + String(index), style: STYLE.item }, [
-					preview,
 					h("div", { key: "body", style: STYLE.body }, [
-						h("div", { key: "repo", style: STYLE.repo }, repo),
-						h("p", { key: "desc", style: STYLE.desc }, String(entry.description === undefined ? "" : entry.description)),
-						h("div", { key: "meta", style: STYLE.meta }, metaBits)
+						h("div", { key: "head", style: STYLE.head }, [
+							h("span", { key: "repo", style: STYLE.repo, title: detail }, repo),
+							h("span", { key: "meta", style: STYLE.meta }, metaBits)
+						]),
+						h("p", { key: "desc", style: STYLE.desc, title: descText }, descText)
 					]),
 					h("div", { key: "actions", style: STYLE.actions }, [
 						h("div", { key: "targets", style: STYLE.row }, TARGETS.map(function (target) {
-							return h("label", { key: target, style: STYLE.radio }, [
+							return h("label", { key: target, style: STYLE.radio, title: target === "claude" ? "~/.claude/skills" : "~/.dsh/skills" }, [
 								h("input", {
 									type: "radio",
 									name: "target-" + repo,
 									value: target,
+									style: STYLE.radioInput,
 									checked: chosen === target,
 									onChange: function () {
 										try {
@@ -792,7 +780,7 @@ window.__ModuleLoader__.load({
 							disabled: isPending,
 							onClick: function () { try { install(entry); } catch (error) { } }
 						}, isPending ? t("videoSkills.installing") : t("videoSkills.install")),
-						rowErrors[repo] !== undefined ? h("div", { key: "error", style: STYLE.errorRow, role: "alert" }, String(rowErrors[repo])) : null
+						rowErrors[repo] !== undefined ? h("div", { key: "error", style: STYLE.errorRow, role: "alert", title: String(rowErrors[repo]) }, String(rowErrors[repo])) : null
 					])
 				]);
 			});

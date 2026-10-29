@@ -46,6 +46,8 @@ dsh plugin --profile <name> add file:/绝对路径/dsh-plugin-video-skills
 
 ## 工具
 
+两个工具在任何组合里都可用——CLI、TUI、Web 都行。只有浏览安装页面需要 Web UI；没有 Web 服务时插件只注册工具，不挂任何 HTTP 路由。
+
 ### `video_skill_search`
 
 | 参数 | 类型 | 默认值 | 说明 |

@@ -9,8 +9,8 @@ import { buildVideoTools, resolveDefineTool } from './tool-schema.js';
 
 /** Cordis plugin name. */
 export const name = 'video-skills';
-/** The web server is required; the tool registry is optional. */
-export const inject = ['webServer'];
+/** Nothing is required: the tools work in any composition, the route waits for a web server. */
+export const inject = [];
 /** Single prefix route the client talks to. */
 export const API_BASE = '/video-skills/api/v1';
 /** Largest JSON body accepted on POST routes. */
@@ -127,14 +127,29 @@ async function registerTools(ctx) {
   return true;
 }
 
-/** Compose the plugin against the host context. */
-export function apply(ctx) {
-  const webServer = ctx?.webServer ?? (typeof ctx?.get === 'function' ? ctx.get('webServer') : undefined);
+/** Mount the prefix route once a web server is composed. */
+function mountRoutes(scope) {
+  const webServer = scope?.webServer ?? (typeof scope?.get === 'function' ? scope.get('webServer') : undefined);
   if (!webServer || typeof webServer.register !== 'function') return;
-
   const registerRoute = () => webServer.register({ kind: 'prefix', path: API_BASE, handler });
-  if (typeof ctx.effect === 'function') ctx.effect(registerRoute);
+  if (typeof scope.effect === 'function') scope.effect(registerRoute);
   else registerRoute();
+}
 
+/**
+ * Compose the plugin against the host context.
+ *
+ * The two halves have different requirements: the model tools are useful in
+ * every composition (CLI, TUI, web), while the HTTP route only exists where a
+ * web server is composed, so each waits for its own service instead of making
+ * the web server a precondition for the whole plugin.
+ */
+export function apply(ctx) {
+  if (typeof ctx?.inject === 'function') {
+    ctx.inject(['tools'], (scope) => { registerTools(scope).catch(() => {}); });
+    ctx.inject(['webServer'], mountRoutes);
+    return;
+  }
+  mountRoutes(ctx);
   registerTools(ctx).catch(() => {});
 }
