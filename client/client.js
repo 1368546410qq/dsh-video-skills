@@ -43,6 +43,8 @@ window.__ModuleLoader__.load({
 		var API_BASE = "video-skills/api/v1";
 		/** Fallback shell when ctx.get("webUiExtensions") does not supply a parent. */
 		var SETTINGS_SECTION = "settings.section";
+		/** Slot the parent service mirrors its page seats into; a seat without it is invisible. */
+		var WEB_EXTENSION_SLOT = "web-ui.extension";
 		/** Parent service id the settings family exposes through ctx.get(). */
 		var WEB_UI_EXTENSIONS = "webUiExtensions";
 		var PAGE_KEY = "video-skills";
@@ -292,13 +294,15 @@ window.__ModuleLoader__.load({
 		* plugin own slot registry otherwise. Mirrors the guarded reference pattern:
 		* options carry id (not key) and the component travels as the second argument.
 		*/
-		function registerSeat(ctx, seat) {
-			var service = serviceOf(ctx);
-			if (service !== undefined) return service.registerPage(seat);
+		function registerSeat(ctx, seat, target) {
+			if (target === "integrated") {
+				var service = serviceOf(ctx);
+				if (service === undefined) throw new Error("webUiExtensions service is unavailable");
+				return service.registerPage(seat);
+			}
 			if (ctx === undefined || ctx === null) return undefined;
 			var slots = ctx.slots;
 			if (slots === null || typeof slots !== "object" || typeof slots.register !== "function") return undefined;
-			if (typeof slots.spec === "function" && slots.spec(SETTINGS_SECTION) === undefined) return undefined;
 			return slots.register({
 				name: SETTINGS_SECTION,
 				id: seat.key,
@@ -309,7 +313,11 @@ window.__ModuleLoader__.load({
 			}, seat.component);
 		}
 
-		/** Build the seat and register it exactly once; a failure warns, never throws. */
+		/**
+		* Keep one reachable seat while the parent service, and the slot it mirrors into,
+		* arrive after this plugin: reconcile on every slot change instead of one attempt
+		* at activation time (dsh-usage/lib/client.js:4049-4113).
+		*/
 		function installPage(ctx) {
 			var t = translator(ctx);
 			var seat = {
@@ -328,16 +336,73 @@ window.__ModuleLoader__.load({
 				},
 				component: VideoSkillsPage
 			};
-			try {
-				return registerSeat(ctx, seat);
-			} catch (error) {
+			var disposeSeat;
+			var current;
+			var reconciling = false;
+			var disposed = false;
+			var warn = function (target, error) {
 				try {
-					console.warn("[dsh-video-skills] page " + PAGE_KEY + " could not be mounted", error);
+					console.warn("[dsh-video-skills] page " + PAGE_KEY + " could not be mounted in " + target, error);
 				} catch (ignored) {
 					/* console may be unavailable in a constrained shell */
 				}
-				return undefined;
+			};
+			var reconcile = function () {
+				if (disposed || reconciling) return;
+				var slots = ctx === undefined || ctx === null ? undefined : ctx.slots;
+				if (slots === null || typeof slots !== "object" || typeof slots.register !== "function") return;
+				var target = serviceOf(ctx) === undefined ? "legacy" : "integrated";
+				if (current === target) return;
+				var slotName = target === "integrated" ? WEB_EXTENSION_SLOT : SETTINGS_SECTION;
+				if (typeof slots.spec === "function" && slots.spec(slotName) === undefined) return;
+				reconciling = true;
+				var previous = current;
+				var disposePrevious = disposeSeat;
+				current = undefined;
+				disposeSeat = undefined;
+				if (typeof disposePrevious === "function") {
+					try {
+						disposePrevious();
+					} catch (error) {
+						/* a seat that is already gone is not a failure */
+					}
+				}
+				try {
+					disposeSeat = registerSeat(ctx, seat, target);
+					current = target;
+				} catch (error) {
+					warn(target, error);
+					if (previous !== undefined) {
+						try {
+							disposeSeat = registerSeat(ctx, seat, previous);
+							current = previous;
+						} catch (restoreError) {
+							warn(previous, restoreError);
+						}
+					}
+				} finally {
+					reconciling = false;
+				}
+			};
+			try {
+				if (typeof ctx.on === "function") ctx.on("slots/changed", reconcile);
+			} catch (error) {
+				/* a shell without events still gets the activation-time attempt below */
 			}
+			reconcile();
+			return function () {
+				if (disposed) return;
+				disposed = true;
+				if (typeof disposeSeat === "function") {
+					try {
+						disposeSeat();
+					} catch (error) {
+						/* dispose is best-effort */
+					}
+				}
+				disposeSeat = undefined;
+				current = undefined;
+			};
 		}
 
 		/** Map an /install failure body onto one inline error line. */
@@ -761,7 +826,7 @@ window.__ModuleLoader__.load({
 		* @param ctx - client root context.
 		*/
 		function apply(ctx) {
-			try {
+				try {
 				ctx.effect(function () {
 					try {
 						if (ctx.locale && typeof ctx.locale.register === "function") return ctx.locale.register(NS, { zh: zh, en: en });
