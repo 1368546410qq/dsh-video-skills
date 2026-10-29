@@ -1,6 +1,6 @@
 {
   "name": "dsh-video-skills",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Browse the awesome-claude-video-skills catalog inside DSH and install a skill with one click.",
   "license": "MIT",
   "repository": {
