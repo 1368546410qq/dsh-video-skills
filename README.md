@@ -1,8 +1,8 @@
 # dsh-video-skills
 
-`dsh-video-skills` is a DSH web plugin that lists the [awesome-claude-video-skills](https://github.com/zhuyansen/awesome-claude-video-skills) catalog in one settings page and installs a chosen repository's skill into `~/.claude/skills` or `~/.dsh/skills` by downloading its GitHub archive and copying files — no code from the installed repository is ever executed.
+**English** | [中文](./README.zh-CN.md)
 
-Chinese documentation: [README.zh-CN.md](./README.zh-CN.md)
+`dsh-video-skills` is a DSH web plugin that lists the [awesome-claude-video-skills](https://github.com/zhuyansen/awesome-claude-video-skills) catalog in one settings page and installs a chosen repository's skill into `~/.claude/skills` or `~/.dsh/skills` by downloading its GitHub archive and copying files — no code from the installed repository is ever executed.
 
 ## What the plugin adds
 

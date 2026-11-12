@@ -1,8 +1,8 @@
 # dsh-video-skills
 
-`dsh-video-skills` 是一个 DSH Web 插件：在设置页中浏览 [awesome-claude-video-skills](https://github.com/zhuyansen/awesome-claude-video-skills) 目录，并通过下载 GitHub 归档、复制文件的方式，把所选仓库的技能安装到 `~/.claude/skills` 或 `~/.dsh/skills`，全程不执行仓库中的任何代码。
+[English](./README.md) | **中文**
 
-English documentation: [README.md](./README.md)
+`dsh-video-skills` 是一个 DSH Web 插件：在设置页中浏览 [awesome-claude-video-skills](https://github.com/zhuyansen/awesome-claude-video-skills) 目录，并通过下载 GitHub 归档、复制文件的方式，把所选仓库的技能安装到 `~/.claude/skills` 或 `~/.dsh/skills`，全程不执行仓库中的任何代码。
 
 ## 插件提供什么
 
