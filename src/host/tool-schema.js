@@ -252,7 +252,7 @@ export function buildVideoTools(options) {
     defineTool({
       name: 'video_skill_search',
       description:
-        'Search the awesome-claude-video-skills catalog (373 GitHub skill repositories for agentic video production). ' +
+        'Search the awesome-claude-video-skills catalog (GitHub skill repositories for agentic video production). ' +
         'Filters: free-text query, kind, security grade, license, minimum stars. Results are ranked by stars.',
       parameters: SEARCH_PARAMETERS,
       output: { schema: SEARCH_OUTPUT_SCHEMA, render: renderSearch },

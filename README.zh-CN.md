@@ -105,10 +105,10 @@ dsh plugin --profile <name> add link:/绝对路径/dsh-plugin-video-skills
 ```json
 {
   "ok": true,
-  "generated": "2026-10-28",
+  "generated": "2026-11-10",
   "source": "https://github.com/zhuyansen/awesome-claude-video-skills",
   "stale": false,
-  "count": 373,
+  "count": 469,
   "entries": [
     {
       "repo": "heygen-com/hyperframes",
@@ -125,7 +125,7 @@ dsh plugin --profile <name> add link:/绝对路径/dsh-plugin-video-skills
   ],
   "sizes": {
     "known": 128,
-    "total": 373
+    "total": 469
   }
 }
 ```
@@ -208,5 +208,5 @@ CONTRACT-V2.md           v2 增量：任务、取消、卸载（不随包发布�
 ## 许可证与数据来源
 
 - 插件代码：MIT，见 [LICENSE](./LICENSE)。Copyright (c) 2026 dujiacheng。
-- 随包数据 `data/skills.json`：源自 <https://github.com/zhuyansen/awesome-claude-video-skills> 的 `data/skills.json`，为未修改的快照（提交引用 `HEAD`，373 条），上游以 **CC0 1.0 Universal** 发布，此处按同样的条款再分发。完整署名见 [data/NOTICE.md](./data/NOTICE.md)。
+- 随包数据 `data/skills.json`：源自 <https://github.com/zhuyansen/awesome-claude-video-skills> 的 `data/skills.json`，为未修改的快照（提交 `84d8681`，469 条），上游以 **CC0 1.0 Universal** 发布，此处按同样的条款再分发。完整署名见 [data/NOTICE.md](./data/NOTICE.md)。
 - 该快照仅作兜底：运行时优先使用刚抓取的上游副本，快照以下发时标记 `stale: true`。

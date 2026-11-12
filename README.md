@@ -105,10 +105,10 @@ Catalog payload:
 ```json
 {
   "ok": true,
-  "generated": "2026-10-28",
+  "generated": "2026-11-10",
   "source": "https://github.com/zhuyansen/awesome-claude-video-skills",
   "stale": false,
-  "count": 373,
+  "count": 469,
   "entries": [
     {
       "repo": "heygen-com/hyperframes",
@@ -125,7 +125,7 @@ Catalog payload:
   ],
   "sizes": {
     "known": 128,
-    "total": 373
+    "total": 469
   }
 }
 ```
@@ -208,5 +208,5 @@ CONTRACT-V2.md           v2 increments: jobs, cancel, uninstall (not published)
 ## License and data provenance
 
 - Plugin code: MIT — see [LICENSE](./LICENSE). Copyright (c) 2026 dujiacheng.
-- Bundled catalog data `data/skills.json`: an unmodified snapshot of `data/skills.json` from <https://github.com/zhuyansen/awesome-claude-video-skills> (commit ref `HEAD`, 373 entries), released upstream under **CC0 1.0 Universal** and redistributed here under the same terms. The full credit is in [data/NOTICE.md](./data/NOTICE.md).
+- Bundled catalog data `data/skills.json`: an unmodified snapshot of `data/skills.json` from <https://github.com/zhuyansen/awesome-claude-video-skills> (commit `84d8681`, 469 entries), released upstream under **CC0 1.0 Universal** and redistributed here under the same terms. The full credit is in [data/NOTICE.md](./data/NOTICE.md).
 - The snapshot is a fallback only: at runtime a freshly fetched upstream copy is preferred, and the snapshot is served marked `stale: true`.

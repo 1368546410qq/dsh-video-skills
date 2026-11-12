@@ -2,7 +2,7 @@
 
 `data/skills.json` is an unmodified snapshot of the upstream catalog file
 `data/skills.json` from https://github.com/zhuyansen/awesome-claude-video-skills
-(fetched over GitHub raw, commit ref `HEAD`, 373 entries).
+(fetched over GitHub raw at commit `84d8681`, upstream `generated` 2026-11-10, 469 entries).
 
 The upstream catalog data is released under **CC0 1.0 Universal** (public domain
 dedication). It is redistributed here under the same terms; the package code
