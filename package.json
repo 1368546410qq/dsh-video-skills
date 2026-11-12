@@ -1,7 +1,7 @@
 {
   "name": "dsh-video-skills",
   "version": "0.1.5",
-  "description": "Browse the awesome-claude-video-skills catalog inside DSH and install a skill with one click.",
+  "description": "Browse the awesome-claude-video-skills catalog inside DSH and install any entry into ~/.claude/skills or ~/.dsh/skills — archive copy, no scripts executed.",
   "license": "MIT",
   "repository": {
     "type": "git",
